@@ -1,0 +1,25 @@
+[project]
+name = "puredata-mcp"
+version = "0.1.0"
+description = "A reliable Model Context Protocol server for Pure Data, driving Pd vanilla over its native FUDI protocol (no externals, no OSC daemon)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jean-Francois Boisvenue" }]
+keywords = ["mcp", "pure-data", "puredata", "fudi", "audio", "claude"]
+dependencies = [
+    "mcp>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+puredata-mcp = "puredata_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["puredata_mcp"]

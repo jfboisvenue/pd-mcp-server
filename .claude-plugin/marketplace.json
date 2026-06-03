@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "puredata-marketplace",
+  "description": "Single-plugin marketplace hosting the puredata MCP server + skill, which lets Claude build and drive Pure Data patches over FUDI.",
+  "owner": {
+    "name": "Jean-Francois Boisvenue"
+  },
+  "plugins": [
+    {
+      "name": "puredata",
+      "description": "Build and drive Pure Data patches from natural language. Bundles a Pd MCP server (FUDI over TCP, native dynamic patching) and a skill that orients Claude on synthesis, audio routing, and py4pd Python objects.",
+      "author": {
+        "name": "Jean-Francois Boisvenue"
+      },
+      "category": "creative",
+      "source": "./",
+      "homepage": "https://github.com/jfboisvenue/pd-mcp-server"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+#N canvas 80 80 760 560 12;
+#X declare -path scripts -lib py4pd;
+#X obj 40 40 netreceive 3000;
+#X obj 40 90 route __dsp __send;
+#X msg 40 330 \; pd dsp \$1;
+#X obj 470 150 s pd-canvas;
+#X obj 150 150 t a a;
+#X obj 150 200 list split 1;
+#X obj 300 200 list split 1;
+#X obj 150 250 list trim;
+#X obj 150 300 send;
+#N canvas 0 50 480 320 canvas 0;
+#X restore 470 220 pd canvas;
+#X text 300 40 <- FUDI listener (TCP port 3000). Open this patch and
+keep it running \, then start the puredata_mcp server.;
+#X text 470 250 objects created by the MCP server appear inside [pd
+canvas];
+#X text 40 360 __dsp -> toggles global audio DSP;
+#X text 150 130 __send -> relays a message to a named [receive] in
+your patch;
+#X connect 0 0 1 0;
+#X connect 1 0 2 0;
+#X connect 1 1 4 0;
+#X connect 1 2 3 0;
+#X connect 4 1 5 0;
+#X connect 4 0 6 0;
+#X connect 5 0 7 0;
+#X connect 6 1 8 0;
+#X connect 7 0 8 1;

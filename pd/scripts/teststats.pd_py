@@ -1,0 +1,17 @@
+import puredata as pd
+
+
+class teststats(pd.NewObject):
+    name = "teststats"
+
+    def __init__(self, args):
+        self.inlets = (pd.DATA,)
+        self.outlets = (pd.DATA,)
+
+    def in_0_list(self, l):
+        nums = [float(x) for x in l]
+        total = sum(nums)
+        self.out(0, pd.LIST, [total, max(nums), min(nums), total / len(nums)])
+
+    def in_0_float(self, f):
+        self.in_0_list([f])
