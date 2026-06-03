@@ -50,8 +50,18 @@ For local development / testing:
 claude --plugin-dir /absolute/path/to/pd-mcp-server
 ```
 
-For end-user install from this repo (which is also its own marketplace —
-see `.claude-plugin/marketplace.json`):
+This repo is its own marketplace (see `.claude-plugin/marketplace.json`), so
+end users install it directly from GitHub — by two different routes depending
+on the client:
+
+**Claude Cowork / Claude Desktop (UI):** open the plugins panel →
+**"Add from repository"** → paste this repo's URL
+(`https://github.com/jfboisvenue/pd-mcp-server`). It installs the bundle
+(skill + MCP server) in one step. Note: there is **no `/plugin` slash command
+in the Cowork chat** — typing `/plugin …` there fails with "unknown skill".
+
+**Claude Code (CLI REPL):** run these as slash commands inside the `claude`
+session:
 
 ```bash
 /plugin marketplace add jfboisvenue/pd-mcp-server
