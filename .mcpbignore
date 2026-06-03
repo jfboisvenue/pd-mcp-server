@@ -1,0 +1,38 @@
+# Python build / runtime artifacts -- uv handles deps at install time
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.uv/
+uv.lock
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code / Plugin marketplace channel (distributed separately via
+# .claude-plugin/, not relevant to .mcpb-installed Desktop users)
+.claude/
+.claude-plugin/
+.mcp.json
+skills/
+bin/
+
+# CI and dev-only files
+.github/
+tests/
+claude_desktop_config.example.json
+
+# Don't ship a .mcpb inside the .mcpb
+*.mcpb
+
+# User scratch/test artifacts that landed in pd/scripts/ during dev.
+# The bundle ships an empty scripts dir (just .gitkeep) -- end users
+# will populate it when they call pd_create_python_object.
+pd/scripts/test_*
+pd/scripts/*.pd_py

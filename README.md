@@ -36,42 +36,49 @@ OSC layer plus a relay daemon on top of Pd. This removes both.
 Objects you create land inside the `[pd canvas]` subpatch, addressed by Pd's
 dynamic-patching receiver `pd-canvas`.
 
-## Install as a Claude plugin (recommended)
+## Install
 
-This repo is structured as a Claude plugin (`.claude-plugin/plugin.json`,
-`.mcp.json`, `skills/puredata/SKILL.md`) so it can be installed on Claude
-Desktop and Claude Code in one step. The plugin bundles the MCP server
-**and** a skill that auto-triggers Claude on Pd-related intents (synth,
-FM, audio routing, py4pd, etc.) without requiring the user to mention
-the MCP by name.
+Pick the channel that matches your client. The repo ships in three
+formats so each lands cleanly:
 
-For local development / testing:
+| Client | How to install | What it activates |
+|---|---|---|
+| **Claude Code** (CLI REPL) | inside a `claude` session: `/plugin marketplace add jfboisvenue/pd-mcp-server` then `/plugin install puredata@puredata-marketplace` | Skill auto-load + 18 MCP tools |
+| **Claude Desktop — Cowork sessions** | Plugins panel → **"Add from repository"** → paste `https://github.com/jfboisvenue/pd-mcp-server` | Skill auto-load + 18 MCP tools (Cowork chat only) |
+| **Claude Desktop — regular chat** | Download `puredata-mcp.mcpb` from [Releases](https://github.com/jfboisvenue/pd-mcp-server/releases) → double-click → Install via **Settings → Extensions** | 18 MCP tools (no skill — the plugin/skill format isn't loaded by this channel) |
+
+You can install both — the plugin (Code + Cowork) and the `.mcpb`
+(regular Desktop chat) coexist, share the same source code, and don't
+conflict.
+
+After install, the skill (where applicable) auto-loads when relevant
+and the MCP tools become available. **You still need to open
+`pd/mcp_host.pd` in Pd** for the server to have something to talk to.
+
+### Why three channels?
+
+Anthropic's plugin marketplace targets Claude Code and Desktop's Cowork
+sessions. Plugins installed this way load their skill in regular Desktop
+chat too, but **not** the MCP server — that's by design across all
+platforms (macOS, Windows, Linux), not a Linux-specific bug. For the MCP
+to appear in regular Desktop chat, you need either a `.mcpb` Desktop
+Extension or a manual entry in `~/.config/Claude/claude_desktop_config.json`
+(see *Manual MCP install* below).
+
+### Local dev / testing
+
+For iteration on the code itself:
+
 ```bash
-claude --plugin-dir /absolute/path/to/pd-mcp-server
+claude --plugin-dir /absolute/path/to/pd-mcp-server   # per-session
 ```
 
-This repo is its own marketplace (see `.claude-plugin/marketplace.json`), so
-end users install it directly from GitHub — by two different routes depending
-on the client:
-
-**Claude Cowork / Claude Desktop (UI):** open the plugins panel →
-**"Add from repository"** → paste this repo's URL
-(`https://github.com/jfboisvenue/pd-mcp-server`). It installs the bundle
-(skill + MCP server) in one step. Note: there is **no `/plugin` slash command
-in the Cowork chat** — typing `/plugin …` there fails with "unknown skill".
-
-**Claude Code (CLI REPL):** run these as slash commands inside the `claude`
-session:
+Or symlink once, persistent across sessions and surfaces:
 
 ```bash
-/plugin marketplace add jfboisvenue/pd-mcp-server
-/plugin install puredata@puredata-marketplace
+mkdir -p ~/.claude/skills && \
+ln -s /absolute/path/to/pd-mcp-server ~/.claude/skills/puredata
 ```
-
-After install, the skill auto-loads when relevant, the MCP tools become
-available, and your shell can launch Claude (Desktop or Code) without
-any further config. **You still need to open `pd/mcp_host.pd` in Pd** for
-the server to have something to talk to.
 
 ## Requirements
 
@@ -98,46 +105,12 @@ the user's Pd host machine additionally needs:
 Verified working stack: Pd 0.56-3 + py4pd 1.2.3 + Python 3.14.5 +
 `.pd_py` classes inheriting `pd.NewObject`.
 
-## Manual install (without the plugin system)
+## Manual MCP install (fallback)
 
-If you can't use the plugin install for some reason, you can register
-the server manually in your client's MCP config (`claude_desktop_config.json`
-for Claude Desktop, or `.mcp.json` in any Claude Code workspace):
-
-```json
-{
-  "mcpServers": {
-    "puredata": {
-      "command": "uv",
-      "args": ["--directory", "/ABSOLUTE/PATH/TO/pd-mcp-server",
-               "run", "python", "-m", "puredata_mcp.server"],
-      "env": { "PD_HOST": "127.0.0.1", "PD_PORT": "3000" }
-    }
-  }
-}
-```
-
-With plain pip instead of uv: `pip install -e .` then use
-`"command": "python", "args": ["-m", "puredata_mcp.server"]`.
-
-Note: manual install only gives you the MCP. The skill (intent-triggered
-orientation, cookbook hints) lives in the plugin's `skills/puredata/SKILL.md`
-and won't auto-load this way.
-
-## Known issue: Linux Claude Desktop
-
-The Linux build of Claude Desktop is **community-maintained** (Debian
-package), not maintained by Anthropic — macOS and Windows are. On Linux,
-marketplace plugin installs land in **"cowork" mode**
-(`~/.config/Claude/local-agent-mode-sessions/.../rpm/plugin_*/`), which
-loads the plugin's skill but **does not launch the plugin's MCP server**.
-Symptom: the `puredata:puredata` skill auto-triggers correctly, but
-Claude reports no `pd_*` tools available, and there is no
-`mcp-server-puredata.log` in `~/.config/Claude/logs/`.
-
-**Workaround** — register the MCP directly in
-`~/.config/Claude/claude_desktop_config.json`, alongside any other MCPs
-you already have:
+If the `.mcpb` install isn't an option (corporate restriction, edge
+case, you want to point Desktop at your dev checkout), register the
+server directly in `~/.config/Claude/claude_desktop_config.json` — the
+same file Desktop reads other classic MCPs from:
 
 ```json
 {
@@ -162,19 +135,44 @@ you already have:
 ```
 
 Use the **absolute** path to `uv` (`which uv` → that path). GUI launchers
-on Linux don't reliably inherit the shell's `PATH`, so a bare `"uv"`
-sometimes fails to resolve even when it's installed.
+don't reliably inherit the shell's `PATH`, so a bare `"uv"` sometimes
+fails to resolve even when uv is installed.
 
 Then fully quit Claude Desktop (right-click tray icon → Quit, or
-`pkill claude-desktop`) and relaunch. Verify it started:
+`pkill claude-desktop` on Linux) and relaunch. Verify the server started:
 
 ```bash
 grep puredata ~/.config/Claude/logs/mcp.log | tail -5
 # expect: [puredata] Server started and connected successfully
 ```
 
-Claude Code and macOS/Windows Desktop are unaffected — the plugin install
-works there end-to-end.
+This route bypasses the plugin/`.mcpb` mechanisms entirely. It's the
+most reliable path when debugging or pinning to a local checkout, at
+the cost of hardcoded paths you maintain manually. The skill won't
+auto-load this way — the manual config only registers the MCP.
+
+## Releasing a new `.mcpb` (maintainer only)
+
+Tag a version matching `pyproject.toml` and push:
+
+```bash
+git tag v0.1.0
+git push --tags
+```
+
+GitHub Actions (`.github/workflows/release-mcpb.yml`) validates the
+manifest, packs the bundle via `mcpb pack`, and publishes a GitHub
+release with `puredata-mcp.mcpb` attached. End users install it via
+Settings → Extensions.
+
+The `.mcpbignore` file controls what ships in the bundle (currently
+10 files / ~23KB). Dev artifacts (`.venv/`, tests, plugin manifests,
+CI config, etc.) are excluded. To preview locally:
+
+```bash
+npx --yes @anthropic-ai/mcpb pack . /tmp/puredata-mcp.mcpb
+unzip -l /tmp/puredata-mcp.mcpb
+```
 
 ## Tools
 
@@ -255,13 +253,20 @@ python -m pytest tests/ -v
 ## Layout
 
 ```
-pd-mcp-server/                  # plugin root
+pd-mcp-server/
+├── manifest.json               # .mcpb manifest (Desktop Extensions channel)
+├── .mcpbignore                 # controls what ships in the .mcpb bundle
+├── .github/workflows/
+│   └── release-mcpb.yml        # CI: pack + publish .mcpb on tag push
 ├── .claude-plugin/
-│   └── plugin.json             # plugin manifest (name=puredata, v0.1.0)
-├── .mcp.json                   # declares the puredata MCP server (stdio)
+│   ├── plugin.json             # plugin manifest (Code + Cowork channel)
+│   └── marketplace.json        # this repo is its own marketplace
+├── .mcp.json                   # plugin's MCP server declaration (stdio)
 ├── skills/
 │   └── puredata/
 │       └── SKILL.md            # auto-triggers on Pd/synth/audio intents
+├── bin/
+│   └── puredata-mcp            # plugin launcher (finds uv across locations)
 ├── puredata_mcp/
 │   ├── server.py               # FastMCP server + tools + init gate
 │   ├── guide.py                # orientation guide returned by pd_init
@@ -271,7 +276,7 @@ pd-mcp-server/                  # plugin root
 ├── pd/scripts/                 # .pd_py files dropped by pd_create_python_object
 ├── tests/                      # mock-Pd round-trip + unit tests
 ├── pyproject.toml
-└── claude_desktop_config.example.json  # legacy manual config (plugin install preferred)
+└── claude_desktop_config.example.json  # legacy example -- see "Manual MCP install"
 ```
 
 ## License

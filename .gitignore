@@ -10,3 +10,5 @@ build/
 uv.lock
 .DS_Store
 .claude/settings.local.json
+# MCPB bundles are produced by CI on tag push, not committed.
+*.mcpb

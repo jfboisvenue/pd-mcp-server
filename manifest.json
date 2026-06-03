@@ -1,0 +1,61 @@
+{
+  "manifest_version": "0.4",
+  "name": "puredata-mcp",
+  "display_name": "Pure Data MCP",
+  "version": "0.1.0",
+  "description": "Build and drive Pure Data patches from natural language. Speaks Pd's native FUDI protocol over TCP for object creation, wiring, DSP toggling, live message routing, and Python class authoring via py4pd.",
+  "long_description": "puredata-mcp lets Claude create [osc~], [dac~], [metro], message boxes, GUI objects, and full signal chains inside a running Pd patch — then drive them live by sending atoms to named [receive] objects. It also writes .pd_py class files (py4pd 1.2.3+) that become custom Pd objects on the canvas.\n\nThe server talks to a [netreceive] listener in a host patch (pd/mcp_host.pd in this repo) via Pd vanilla's built-in dynamic-patching messages. No externals required on the Pd side EXCEPT py4pd if you want the Python-object tools.\n\nPREREQUISITES:\n  - Pure Data vanilla 0.51+ open with pd/mcp_host.pd listening on the configured port.\n  - For Python tools: Pd >= 0.56, py4pd >= 1.2.3 installed via Help > Find externals, and Python 3.14 system-wide (py4pd's Deken build links against libpython3.14.so.1.0).\n  - `uv` (https://github.com/astral-sh/uv) installed on the machine where Claude Desktop runs (the host manages it).",
+  "author": {
+    "name": "Jean-Francois Boisvenue"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jfboisvenue/pd-mcp-server"
+  },
+  "homepage": "https://github.com/jfboisvenue/pd-mcp-server",
+  "license": "MIT",
+  "keywords": ["pure-data", "puredata", "pd", "audio", "synthesis", "fudi", "py4pd", "mcp"],
+  "server": {
+    "type": "uv",
+    "entry_point": "puredata_mcp/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "python",
+        "-m",
+        "puredata_mcp.server"
+      ],
+      "env": {
+        "PD_HOST": "${user_config.pd_host}",
+        "PD_PORT": "${user_config.pd_port}"
+      }
+    }
+  },
+  "user_config": {
+    "pd_host": {
+      "type": "string",
+      "title": "Pure Data host",
+      "description": "Hostname or IP where Pd's [netreceive] is listening. Use 127.0.0.1 if Pd runs on the same machine as Claude Desktop.",
+      "default": "127.0.0.1",
+      "required": true
+    },
+    "pd_port": {
+      "type": "number",
+      "title": "Pure Data port",
+      "description": "TCP port of the FUDI listener in mcp_host.pd. Must match the [netreceive <port>] argument in your Pd patch.",
+      "default": 3000,
+      "min": 1024,
+      "max": 65535,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

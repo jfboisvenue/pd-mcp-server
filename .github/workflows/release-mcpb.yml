@@ -1,0 +1,50 @@
+name: Release .mcpb
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install MCPB CLI
+        run: npm install -g @anthropic-ai/mcpb
+
+      - name: Validate manifest.json
+        run: mcpb validate manifest.json
+
+      - name: Pack extension
+        run: mcpb pack . puredata-mcp.mcpb
+
+      - name: Show bundle contents (sanity check)
+        run: unzip -l puredata-mcp.mcpb
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: puredata-mcp.mcpb
+          generate_release_notes: true
+          body: |
+            One-click install for Claude Desktop's regular chat:
+
+            1. Download `puredata-mcp.mcpb` below.
+            2. Double-click it (or open Claude Desktop → Settings → Extensions → Install from file).
+            3. Set `PD_HOST` (default `127.0.0.1`) and `PD_PORT` (default `3000`) in the install dialog.
+            4. Open `pd/mcp_host.pd` in Pure Data and keep it running.
+
+            See the [README](https://github.com/jfboisvenue/pd-mcp-server#install)
+            for prerequisites (Pd >= 0.51, plus Pd 0.56 / py4pd / Python 3.14
+            if you want the Python-object tools).
