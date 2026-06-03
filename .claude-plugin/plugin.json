@@ -1,6 +1,6 @@
 {
   "name": "puredata",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Build and drive Pure Data patches from natural language. Bundles a Pd MCP server (FUDI over TCP, native dynamic patching) and a skill that orients Claude on synthesis, audio routing, and py4pd Python objects.",
   "author": {
     "name": "Jean-Francois Boisvenue"

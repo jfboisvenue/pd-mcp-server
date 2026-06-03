@@ -554,14 +554,17 @@ async def pd_create_python_object(params: CreatePythonObjectInput) -> str:
     py4pd 1.2.3+ class model:
       * The Python file defines `class <name>(pd.NewObject)` with
         `name = "<name>"`.
-      * `__init__(self, args)` sets `self.inlets` and `self.outlets` as
-        tuples of types (pd.DATA, pd.FLOAT, pd.SYMBOL, pd.LIST, pd.BANG,
-        pd.PD_SIGNAL...).
+      * `__init__(self, args)` sets `self.inlets` and `self.outlets`.
+        ⚠️ ALWAYS use pd.DATA for inlets -- pd.FLOAT/SYMBOL/LIST
+        inlets segfault Pd at instantiation in py4pd 1.2.3. The
+        in_<idx>_<msgtype> dispatch still works with pd.DATA inlets.
+        Safe output types: pd.DATA, pd.FLOAT, pd.SYMBOL, pd.LIST,
+        pd.BANG, pd.SIGNAL.
       * Handlers are methods named `in_<idx>_<msgtype>` (e.g. in_0_list,
         in_0_float, in_0_bang).
       * Outputs go through `self.out(idx, pd.<TYPE>, value)`.
 
-    See pd_init for the canonical template.
+    See pd_init for the canonical template and the full warning.
     """
     if (gate := _require_init()): return gate
     try:
@@ -601,10 +604,17 @@ async def pd_create_python_object(params: CreatePythonObjectInput) -> str:
 async def pd_update_python_script(params: UpdatePythonScriptInput) -> str:
     """Rewrite an existing .pd_py file in the managed scripts dir.
 
-    Does NOT reload running instances automatically. To pick up the new
-    class definition, the user must re-create the object (delete and
-    recreate via pd_clear_canvas + rebuild, or hand-delete in Pd).
-    py4pd 1.2.3 does not currently expose a per-instance reload message.
+    ⚠️ py4pd 1.2.3 caches every .pd_py in sys.modules and never
+    re-imports on object re-creation. After this tool returns, the new
+    file is on disk but **the running Pd still executes the OLD
+    bytecode**, even if you call pd_clear_canvas and rebuild. A
+    traceback would show the new source while the actual error refers
+    to the cached symbols -- a confusing signal.
+
+    The only reliable recovery: tell the user to **restart Pd** (close
+    + reopen mcp_host.pd). After restart, the next instantiation of
+    [<name>] picks up the new file fresh. This tool writes the file
+    and surfaces the restart instruction; it cannot bypass the cache.
     """
     if (gate := _require_init()): return gate
     try:
@@ -613,8 +623,10 @@ async def pd_update_python_script(params: UpdatePythonScriptInput) -> str:
         existed = script_path.exists()
         script_path.write_text(params.code, encoding="utf-8")
         verb = "Rewrote" if existed else "Created"
-        return _ok(f"{verb} {script_path.name}. Re-create any [{params.name}] "
-                   f"object on the canvas to pick up the new class definition.",
+        return _ok(f"{verb} {script_path.name}. To pick up the new code, "
+                   f"the user must RESTART Pure Data -- py4pd 1.2.3 caches "
+                   f".pd_py in sys.modules and re-creating the [{params.name}] "
+                   f"object alone still runs the old bytecode.",
                    script_path=str(script_path), scripts_dir=str(scripts_dir),
                    existed=existed)
     except Exception as exc:  # noqa: BLE001

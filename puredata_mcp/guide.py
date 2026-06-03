@@ -130,17 +130,29 @@ function]. Do not use it -- you will get inert objects with no
 inlets/outlets.
 
 Class anatomy (inlets, outlets, handlers, output):
-  - `self.inlets = (pd.DATA, ...)` in __init__: tuple of inlet types
+  - `self.inlets = (pd.DATA, ...)` in __init__: tuple of inlet types.
+    **ALWAYS use pd.DATA for inlets** (see warning below).
   - `self.outlets = (pd.DATA, ...)`: tuple of outlet types
-  - Types: pd.DATA (any), pd.FLOAT, pd.SYMBOL, pd.LIST, pd.BANG,
-           pd.PD_SIGNAL (audio rate)
-  - Handler methods: `in_<idx>_<msgtype>(self, value)`
+  - Handler methods: `in_<idx>_<msgtype>(self, value)` -- inlet typed
+    pd.DATA dispatches to the appropriate handler based on the actual
+    message type, so you still write typed handlers:
         in_0_bang(self)                    bang at inlet 0
         in_0_float(self, f)                float at inlet 0
         in_0_list(self, l)                 list at inlet 0
         in_0_symbol(self, s)               symbol at inlet 0
         in_1_float(self, f)                float at inlet 1
-  - Emit via `self.out(idx, pd.<TYPE>, value)`
+  - Emit via `self.out(idx, pd.<TYPE>, value)`. Output types: pd.DATA,
+    pd.FLOAT, pd.SYMBOL, pd.LIST, pd.BANG, pd.SIGNAL (audio rate).
+
+  ⚠️ INLET TYPE WARNING (py4pd 1.2.3 + Python 3.14, confirmed on
+  Windows, behavior on Linux/macOS uncertain at time of writing):
+  declaring an inlet as pd.FLOAT, pd.SYMBOL, or pd.LIST **segfaults
+  Pd at object instantiation**, before any handler runs. Symptom:
+  Pd log shows "1 objects found inside <name>.pd_py" then the
+  process dies. **Use pd.DATA for every inlet** -- the typed
+  handlers (in_0_float etc.) still receive the right type via
+  internal dispatch. pd.BANG and pd.SIGNAL are safe for inlets.
+  Output types are unaffected.
 
 Canonical template (give this to the user as the starting point):
 
@@ -201,9 +213,18 @@ class doubler(pd.NewObject):
      pd_update_python_script(
          name='doubler', scripts_dir=<same dir as above>,
          code=<new code>)
-     Then re-create the [doubler] object on the canvas (pd_clear_canvas
-     + rebuild, or hand-delete in Pd) -- py4pd 1.2.3 does not expose a
-     per-instance reload message.
+
+     ⚠️ py4pd 1.2.3 caches every .pd_py in sys.modules and does NOT
+     re-import on object re-creation. Re-creating the [doubler]
+     object on the canvas (pd_clear_canvas + rebuild, or hand-delete
+     in Pd) **still runs the OLD bytecode** -- you'll see your new
+     source if a traceback fires, but the executing code is stale.
+
+     The only reliable way to pick up the new file: **restart Pd**
+     (close + reopen mcp_host.pd). After restart, the new .pd_py is
+     imported fresh on first use of [<name>]. Tell the user this
+     explicitly when they ask you to iterate -- pd_update_python_script
+     writes the file, but Pd needs a restart to actually pick it up.
 
 Environment prerequisites (warn the user if unmet -- you cannot check
 this yourself but the symptoms below help diagnose):

@@ -404,8 +404,10 @@ def test_python_update_script_rewrites_file(tmp_path, monkeypatch):
     payload = _json.loads(result)
     assert payload["existed"] is True
     assert "Rewrote" in payload["message"]
-    # Should hint at the re-create requirement (py4pd 1.2.3 has no reload).
-    assert "Re-create" in payload["message"]
+    # Should tell the agent that py4pd's sys.modules cache means re-creating
+    # the object alone is insufficient -- only a Pd restart picks up edits.
+    assert "RESTART" in payload["message"]
+    assert "sys.modules" in payload["message"]
 
 
 # -- server-side init gate (imports server.py) ------------------------------- #

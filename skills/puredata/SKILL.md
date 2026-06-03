@@ -50,6 +50,12 @@ For Python-augmented patches (py4pd 1.2.3+): use `pd_create_python_object` to wr
 
 **Do not use the obsolete `[py4pd script function]` syntax.** That mode was removed in py4pd 1.2.3 and produces inert objects with no inlets/outlets. The current API is class-based: see `pd_init` for the canonical template (`import puredata as pd` + `class <name>(pd.NewObject)` with `name = "<name>"`, `self.inlets`, `self.outlets`, and `in_<idx>_<msgtype>` handlers).
 
+**⚠️ Two known py4pd 1.2.3 gotchas to relay to the user upfront when they ask for Python objects:**
+
+1. **Always declare inlets as `pd.DATA`** — never `pd.FLOAT`, `pd.SYMBOL`, or `pd.LIST`. Those typed inlets segfault Pd at instantiation (confirmed on Windows + Python 3.14; unverified on Linux/macOS, but `pd.DATA` is safe everywhere). Typed handlers (`in_0_float`, `in_0_list`, etc.) still work fine when the inlet is `pd.DATA` — the dispatch happens internally. Output types are unaffected (use `pd.FLOAT`/`pd.LIST`/etc. freely in `self.out()`).
+
+2. **Iterating on Python code requires restarting Pd** — `pd_update_python_script` writes the new file, but py4pd caches `.pd_py` in `sys.modules` and never re-imports. Re-creating the `[<name>]` object on the canvas still runs the OLD bytecode. Tell the user to close + reopen `mcp_host.pd` (or restart Pd entirely) to pick up edits. Don't promise hot-reload — it doesn't exist.
+
 **Important — where the .pd_py file lands.** Both Python tools take an optional `scripts_dir` argument. On the FIRST Python call of a session, ask the user where their Pd patch lives and pass `<patch-dir>/scripts` (or a path they specify) as `scripts_dir`. Remember that value and reuse it for every subsequent Python tool call in the session. Then tell the user their patch must contain BOTH `[declare -path <that-dir>]` AND `[declare -lib py4pd]` so py4pd is loaded and can autoregister the class — the tool response repeats both requirements you should quote back to them. If you skip `scripts_dir`, the server writes to the plugin's bundled `pd/scripts/`, which is only correct when the user is running the unmodified `mcp_host.pd` from the plugin install dir. **Do not assume** this is their setup — ask.
 
 **Environment prerequisites for the Python branch** (warn the user up-front if their patch is on an older Pd, or you'll waste a round-trip on a silent failure):
