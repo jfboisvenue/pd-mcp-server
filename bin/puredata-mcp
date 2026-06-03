@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# puredata-mcp launcher.
+#
+# Why this wrapper exists: GUI launchers on Linux (and to a lesser extent
+# macOS) don't always inherit the user's shell PATH. A plugin .mcp.json
+# that names a bare `uv` works from a shell-launched session but breaks
+# when Claude is started from an .app or .desktop icon. This script
+# searches well-known locations for uv (then falls back to system
+# python3) so the plugin works regardless of how the host was launched.
+
+set -euo pipefail
+
+# CLAUDE_PLUGIN_ROOT is set by the host. If we're invoked directly
+# (testing), fall back to this script's grandparent dir.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+# 1. Try uv from well-known locations + the inherited PATH.
+for uv_bin in \
+    "${HOME}/.local/bin/uv" \
+    "/opt/homebrew/bin/uv" \
+    "/usr/local/bin/uv" \
+    "$(command -v uv 2>/dev/null || true)"; do
+  if [ -n "$uv_bin" ] && [ -x "$uv_bin" ]; then
+    exec "$uv_bin" run --directory "$PLUGIN_ROOT" python -m puredata_mcp.server "$@"
+  fi
+done
+
+# 2. Fallback: system python3 + PYTHONPATH. Requires `mcp` and `pydantic`
+#    installed on the system Python (e.g. pip install --user "mcp>=1.2.0" pydantic).
+if command -v python3 >/dev/null 2>&1; then
+  exec env \
+    PYTHONPATH="$PLUGIN_ROOT" \
+    python3 -m puredata_mcp.server "$@"
+fi
+
+# 3. Nothing worked. Print actionable hints to stderr (the host will surface
+#    these in the MCP server log) and exit non-zero.
+cat >&2 <<'EOF'
+puredata-mcp: could not locate `uv` or `python3` on this system.
+
+To fix:
+  1. Install uv (recommended):
+       curl -LsSf https://astral.sh/uv/install.sh | sh
+  2. OR install Python 3.10+ and the server's deps:
+       python3 -m pip install --user "mcp>=1.2.0" pydantic
+
+If uv is installed but in a non-standard location, symlink it where the
+GUI launcher's PATH can see it:
+  sudo ln -s "$(which uv)" /usr/local/bin/uv
+EOF
+exit 127

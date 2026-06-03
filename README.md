@@ -124,6 +124,58 @@ Note: manual install only gives you the MCP. The skill (intent-triggered
 orientation, cookbook hints) lives in the plugin's `skills/puredata/SKILL.md`
 and won't auto-load this way.
 
+## Known issue: Linux Claude Desktop
+
+The Linux build of Claude Desktop is **community-maintained** (Debian
+package), not maintained by Anthropic — macOS and Windows are. On Linux,
+marketplace plugin installs land in **"cowork" mode**
+(`~/.config/Claude/local-agent-mode-sessions/.../rpm/plugin_*/`), which
+loads the plugin's skill but **does not launch the plugin's MCP server**.
+Symptom: the `puredata:puredata` skill auto-triggers correctly, but
+Claude reports no `pd_*` tools available, and there is no
+`mcp-server-puredata.log` in `~/.config/Claude/logs/`.
+
+**Workaround** — register the MCP directly in
+`~/.config/Claude/claude_desktop_config.json`, alongside any other MCPs
+you already have:
+
+```json
+{
+  "mcpServers": {
+    "puredata": {
+      "command": "/home/YOU/.local/bin/uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/pd-mcp-server",
+        "run",
+        "python",
+        "-m",
+        "puredata_mcp.server"
+      ],
+      "env": {
+        "PD_HOST": "127.0.0.1",
+        "PD_PORT": "3000"
+      }
+    }
+  }
+}
+```
+
+Use the **absolute** path to `uv` (`which uv` → that path). GUI launchers
+on Linux don't reliably inherit the shell's `PATH`, so a bare `"uv"`
+sometimes fails to resolve even when it's installed.
+
+Then fully quit Claude Desktop (right-click tray icon → Quit, or
+`pkill claude-desktop`) and relaunch. Verify it started:
+
+```bash
+grep puredata ~/.config/Claude/logs/mcp.log | tail -5
+# expect: [puredata] Server started and connected successfully
+```
+
+Claude Code and macOS/Windows Desktop are unaffected — the plugin install
+works there end-to-end.
+
 ## Tools
 
 The agent must call **`pd_init` first** — every other tool refuses to run
