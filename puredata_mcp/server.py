@@ -26,6 +26,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from mcp.server.fastmcp import FastMCP
 
+from . import builders, versioning
 from .fudi import FudiClient, FudiError
 from .guide import GUIDE
 from .patch_state import PatchState
@@ -325,6 +326,53 @@ class UpdatePythonScriptInput(BaseModel):
         return v
 
 
+class SnapshotInput(BaseModel):
+    """Commit the current patch as a versioned checkpoint."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    label: str = Field(..., min_length=1, max_length=200,
+                       description="Human label for this checkpoint (becomes the "
+                                   "git commit message; restore by this label).")
+    branch: Optional[str] = Field(
+        default=None, max_length=120,
+        description="Optional branch name. Use branches for sound variants to "
+                    "A/B (e.g. 'bright', 'dark'). Created if new, switched to if "
+                    "it exists. Omit to commit on the current branch.")
+    checkpoints_dir: Optional[str] = Field(
+        default=None,
+        description="Absolute path to the dedicated checkpoints repo. Defaults "
+                    "to PD_CHECKPOINTS_DIR env, then the bundled checkpoints/. "
+                    "Pass the same value across snapshot/restore/list in a session.")
+
+    @field_validator("branch")
+    @classmethod
+    def _branch_no_spaces(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and any(c.isspace() for c in v):
+            raise ValueError("branch name cannot contain whitespace")
+        return v
+
+
+class RestoreInput(BaseModel):
+    """Re-render the canvas from a saved checkpoint (destructive)."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    ref: str = Field(..., min_length=1, max_length=200,
+                     description="Checkpoint to restore: a label, a short/long "
+                                 "commit hash, or a branch name.")
+    checkpoints_dir: Optional[str] = Field(
+        default=None,
+        description="Absolute path to the checkpoints repo (see pd_snapshot).")
+
+
+class ListCheckpointsInput(BaseModel):
+    """List available checkpoints."""
+    model_config = ConfigDict(extra="forbid")
+
+    checkpoints_dir: Optional[str] = Field(
+        default=None,
+        description="Absolute path to the checkpoints repo (see pd_snapshot).")
+
+
 # --------------------------------------------------------------------------- #
 # Init -- mandatory first call
 # --------------------------------------------------------------------------- #
@@ -368,8 +416,9 @@ async def pd_create_object(params: CreateObjectInput) -> str:
     if (gate := _require_init()): return gate
     try:
         text = " ".join([params.type, *params.args]).strip()
-        _client.send_atoms(["obj", params.x, params.y, params.type, *params.args])
-        oid = _state.add("obj", text)
+        _client.send_atoms(builders.obj_atoms(params.type, params.args, params.x, params.y))
+        oid = _state.add("obj", {"type": params.type, "args": params.args,
+                                 "x": params.x, "y": params.y})
         return _ok(f"Created object [{text}] (id {oid}).", object_id=oid, object=text)
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -386,8 +435,8 @@ async def pd_create_message(params: CreateMessageInput) -> str:
     if (gate := _require_init()): return gate
     try:
         text = " ".join(params.atoms)
-        _client.send_atoms(["msg", params.x, params.y, *params.atoms])
-        oid = _state.add("msg", text)
+        _client.send_atoms(builders.msg_atoms(params.atoms, params.x, params.y))
+        oid = _state.add("msg", {"atoms": params.atoms, "x": params.x, "y": params.y})
         return _ok(f"Created message box [{text}( (id {oid}).", object_id=oid, object=text)
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -407,8 +456,8 @@ async def pd_create_comment(params: CreateCommentInput) -> str:
     """
     if (gate := _require_init()): return gate
     try:
-        _client.send_atoms(["text", params.x, params.y, params.text])
-        oid = _state.add("comment", params.text)
+        _client.send_atoms(builders.comment_atoms(params.text, params.x, params.y))
+        oid = _state.add("comment", {"text": params.text, "x": params.x, "y": params.y})
         return _ok(f"Created comment (id {oid}).", object_id=oid, object=params.text)
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -428,14 +477,11 @@ async def pd_create_floatatom(params: CreateFloatatomInput) -> str:
     """
     if (gate := _require_init()): return gate
     try:
-        # floatatom X Y WIDTH MIN MAX LOWER_LIMIT_POS SEND RECEIVE LABEL
-        # The trailing "- - -" placeholders mean "no send/receive/label".
-        _client.send_atoms([
-            "floatatom", params.x, params.y, params.width,
-            params.min, params.max, 0, "-", "-", "-",
-        ])
+        _client.send_atoms(builders.floatatom_atoms(
+            params.width, params.min, params.max, params.x, params.y))
         text = f"floatatom w={params.width} min={params.min} max={params.max}"
-        oid = _state.add("floatatom", text)
+        oid = _state.add("floatatom", {"width": params.width, "min": params.min,
+                                       "max": params.max, "x": params.x, "y": params.y})
         return _ok(f"Created floatatom (id {oid}).", object_id=oid, object=text)
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -451,12 +497,9 @@ async def pd_create_bang(params: CreateBangInput) -> str:
     """Create a bang button ``[bng]``. Outlet 0 fires 'bang' on click."""
     if (gate := _require_init()): return gate
     try:
-        # bng SIZE HOLD INTRRPT INIT SEND RECEIVE LABEL X_OFF Y_OFF FONT FONTSIZE BG FG LABEL_COLOR
-        args = [params.size, 250, 50, 0, "empty", "empty", "empty",
-                17, 7, 0, 10, "#fcfcfc", "#000000", "#000000"]
-        _client.send_atoms(["obj", params.x, params.y, "bng", *args])
+        _client.send_atoms(builders.bng_atoms(params.size, params.x, params.y))
         text = f"bng size={params.size}"
-        oid = _state.add("bng", text)
+        oid = _state.add("bng", {"size": params.size, "x": params.x, "y": params.y})
         return _ok(f"Created bang (id {oid}).", object_id=oid, object=text)
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -472,13 +515,11 @@ async def pd_create_toggle(params: CreateToggleInput) -> str:
     """Create a toggle ``[tgl]``. Outlet 0 emits 0 or 1 on click."""
     if (gate := _require_init()): return gate
     try:
-        # tgl SIZE INIT SEND RECEIVE LABEL X_OFF Y_OFF FONT FONTSIZE BG FG LABEL_COLOR INIT_VAL DEFAULT
-        init = 1 if params.initial else 0
-        args = [params.size, 0, "empty", "empty", "empty",
-                17, 7, 0, 10, "#fcfcfc", "#000000", "#000000", init, 1]
-        _client.send_atoms(["obj", params.x, params.y, "tgl", *args])
+        _client.send_atoms(builders.tgl_atoms(params.size, params.initial,
+                                              params.x, params.y))
         text = f"tgl size={params.size} init={params.initial}"
-        oid = _state.add("tgl", text)
+        oid = _state.add("tgl", {"size": params.size, "initial": params.initial,
+                                 "x": params.x, "y": params.y})
         return _ok(f"Created toggle (id {oid}).", object_id=oid, object=text)
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -494,13 +535,11 @@ async def pd_create_number_box(params: CreateNumberBoxInput) -> str:
     """Create a boxed number ``[nbx]`` with min/max bounds and display."""
     if (gate := _require_init()): return gate
     try:
-        # nbx WIDTH HEIGHT MIN MAX LOG INIT SEND RECEIVE LABEL X_OFF Y_OFF FONT FONTSIZE BG FG LABEL_COLOR INIT_VAL LOG_HEIGHT
-        args = [params.width, 14, params.min, params.max, 0, 0,
-                "empty", "empty", "empty",
-                0, -8, 0, 10, "#fcfcfc", "#000000", "#000000", 0, 256]
-        _client.send_atoms(["obj", params.x, params.y, "nbx", *args])
+        _client.send_atoms(builders.nbx_atoms(
+            params.width, params.min, params.max, params.x, params.y))
         text = f"nbx w={params.width} min={params.min} max={params.max}"
-        oid = _state.add("nbx", text)
+        oid = _state.add("nbx", {"width": params.width, "min": params.min,
+                                 "max": params.max, "x": params.x, "y": params.y})
         return _ok(f"Created number box (id {oid}).", object_id=oid, object=text)
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -517,17 +556,11 @@ async def pd_create_slider(params: CreateSliderInput) -> str:
     if (gate := _require_init()): return gate
     try:
         kind = "hsl" if params.orientation == "horizontal" else "vsl"
-        # hsl WIDTH HEIGHT MIN MAX LOG INIT SEND RECEIVE LABEL X_OFF Y_OFF FONT FONTSIZE BG FG LABEL_COLOR INIT_VAL STEADY
-        if kind == "hsl":
-            w, h = 128, 15
-        else:
-            w, h = 15, 128
-        args = [w, h, params.min, params.max, 0, 0,
-                "empty", "empty", "empty",
-                0, -8, 0, 10, "#fcfcfc", "#000000", "#000000", 0, 1]
-        _client.send_atoms(["obj", params.x, params.y, kind, *args])
+        _client.send_atoms(builders.slider_atoms(
+            params.orientation, params.min, params.max, params.x, params.y))
         text = f"{kind} min={params.min} max={params.max}"
-        oid = _state.add(kind, text)
+        oid = _state.add(kind, {"orientation": params.orientation, "min": params.min,
+                                "max": params.max, "x": params.x, "y": params.y})
         return _ok(f"Created {params.orientation} slider (id {oid}).",
                    object_id=oid, object=text)
     except Exception as exc:  # noqa: BLE001
@@ -574,8 +607,8 @@ async def pd_create_python_object(params: CreatePythonObjectInput) -> str:
 
         # The Pd object name IS the class name -- py4pd autoregisters it
         # when Pd encounters the unknown [name] and finds name.pd_py on path.
-        _client.send_atoms(["obj", params.x, params.y, params.name])
-        oid = _state.add("py4pd", params.name)
+        _client.send_atoms(builders.py4pd_atoms(params.name, params.x, params.y))
+        oid = _state.add("py4pd", {"name": params.name, "x": params.x, "y": params.y})
         reminder = (
             "" if params.scripts_dir else
             " (Used default scripts dir -- pass scripts_dir explicitly if the "
@@ -651,8 +684,11 @@ async def pd_connect(params: ConnectInput) -> str:
             if not _state.exists(oid):
                 return (f"Error: {label}={oid} does not exist. "
                         f"Known ids: {[o['id'] for o in _state.as_list()]}.")
-        _client.send_atoms(["connect", params.source_id, params.source_outlet,
-                             params.target_id, params.target_inlet])
+        _client.send_atoms(builders.connect_atoms(
+            params.source_id, params.source_outlet,
+            params.target_id, params.target_inlet))
+        _state.add_edge(params.source_id, params.source_outlet,
+                        params.target_id, params.target_inlet)
         return _ok(f"Connected {params.source_id}:{params.source_outlet} -> "
                    f"{params.target_id}:{params.target_inlet}.")
     except Exception as exc:  # noqa: BLE001
@@ -671,6 +707,8 @@ async def pd_disconnect(params: ConnectInput) -> str:
     try:
         _client.send_atoms(["disconnect", params.source_id, params.source_outlet,
                              params.target_id, params.target_inlet])
+        _state.remove_edge(params.source_id, params.source_outlet,
+                           params.target_id, params.target_inlet)
         return _ok(f"Disconnected {params.source_id}:{params.source_outlet} -> "
                    f"{params.target_id}:{params.target_inlet}.")
     except Exception as exc:  # noqa: BLE001
@@ -780,6 +818,129 @@ async def pd_get_state() -> str:
         "next_index": _state.next_index(),
         "objects": _state.as_list(),
     }, indent=2)
+
+
+# --------------------------------------------------------------------------- #
+# Versioning -- snapshot / restore / list
+# --------------------------------------------------------------------------- #
+
+def _replay(ir: dict) -> tuple[int, int]:
+    """Re-render the canvas from an IR: clear, recreate nodes, reconnect edges.
+
+    Nodes are replayed in ascending id order so Pd reassigns contiguous
+    creation indices 0..n-1. Original ids may have holes (hand-edits); we
+    build an old->new id map and remap edges through it. The authoritative
+    state is then reloaded from the *compacted* graph so it matches what is
+    actually on the canvas.
+
+    Returns (nodes_rendered, edges_rendered).
+    """
+    _client.send_atoms(["clear"])
+    nodes = sorted(ir.get("nodes", []), key=lambda n: n["id"])
+    id_map = {node["id"]: new_idx for new_idx, node in enumerate(nodes)}
+
+    for node in nodes:
+        params = {k: v for k, v in node.items() if k not in ("id", "kind")}
+        _client.send_atoms(builders.atoms_for(node["kind"], params))
+
+    rendered_edges = []
+    for e in ir.get("edges", []):
+        if e["from"] in id_map and e["to"] in id_map:
+            src, dst = id_map[e["from"]], id_map[e["to"]]
+            _client.send_atoms(builders.connect_atoms(
+                src, e["from_outlet"], dst, e["to_inlet"]))
+            rendered_edges.append((src, e["from_outlet"], dst, e["to_inlet"]))
+
+    compacted = {
+        "version": ir.get("version", 1),
+        "canvas": ir.get("canvas", {}),
+        "nodes": [{**{k: v for k, v in node.items() if k != "id"},
+                   "id": id_map[node["id"]]} for node in nodes],
+        "edges": [{"from": s, "from_outlet": so, "to": d, "to_inlet": di}
+                  for (s, so, d, di) in rendered_edges],
+    }
+    _state.load_ir(compacted)
+    return len(nodes), len(rendered_edges)
+
+
+@mcp.tool(
+    name="pd_snapshot",
+    annotations={"title": "Snapshot Pd Patch", "readOnlyHint": False,
+                 "destructiveHint": False, "idempotentHint": False,
+                 "openWorldHint": False},
+)
+async def pd_snapshot(params: SnapshotInput) -> str:
+    """Commit the current patch (IR) as a versioned checkpoint.
+
+    Serializes the authoritative model to JSON and commits it in a
+    dedicated git repo. Use ``branch`` for sound variants to A/B. Restore
+    later with pd_restore using the label, hash, or branch.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        info = versioning.save(checkpoints_dir, _state.to_ir(),
+                               params.label, params.branch)
+        return _ok(
+            f"Snapshot '{params.label}' committed ({info['hash']}) on branch "
+            f"{info['branch']} -- {_state.count()} objects, "
+            f"{_state.edge_count()} connections.",
+            checkpoints_dir=str(checkpoints_dir),
+            hash=info["hash"], branch=info["branch"], label=info["label"],
+            nodes=_state.count(), edges=_state.edge_count(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_restore",
+    annotations={"title": "Restore Pd Checkpoint", "readOnlyHint": False,
+                 "destructiveHint": True, "idempotentHint": True,
+                 "openWorldHint": True},
+)
+async def pd_restore(params: RestoreInput) -> str:
+    """Re-render the canvas from a saved checkpoint (clears first).
+
+    Destructive: clears the canvas, then replays the checkpoint's objects
+    and connections deterministically from the IR. Ids are recompacted to
+    0..n-1. Note: for py4pd objects the .pd_py file must still exist on
+    disk, and Pd's module cache may require a restart to pick up changed
+    Python code.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        ir = versioning.read_ir_at(checkpoints_dir, params.ref)
+        n_nodes, n_edges = _replay(ir)
+        return _ok(
+            f"Restored '{params.ref}': re-rendered {n_nodes} objects and "
+            f"{n_edges} connections.",
+            checkpoints_dir=str(checkpoints_dir), nodes=n_nodes, edges=n_edges,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_list_checkpoints",
+    annotations={"title": "List Pd Checkpoints", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": False},
+)
+async def pd_list_checkpoints(params: ListCheckpointsInput) -> str:
+    """List checkpoints (across all branches) in the checkpoints repo."""
+    if (gate := _require_init()): return gate
+    try:
+        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        cps = versioning.list_checkpoints(checkpoints_dir)
+        return json.dumps({
+            "checkpoints_dir": str(checkpoints_dir),
+            "count": len(cps),
+            "checkpoints": cps,
+        }, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
 
 
 def main() -> None:

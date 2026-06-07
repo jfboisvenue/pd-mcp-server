@@ -51,6 +51,7 @@ TYPICAL WORKFLOW
 4. pd_connect    (use ids returned by step 3)
 5. pd_set_dsp on=true                   (only when ready -- audio is loud)
 6. pd_send_message                      (drive a [r <name>] in the patch)
+7. pd_snapshot label="..."              (checkpoint a state worth keeping)
 
 ============================================================
 COMMON OBJECTS BY TASK
@@ -110,6 +111,46 @@ COOKBOOK
    pd_create_object("+", ["1"], 40, 90)             -> id 1
    pd_create_object("print", [],     40, 140)       -> id 2
    pd_connect(0,0, 1,0); pd_connect(1,0, 2,0); pd_connect(1,0, 1,1)
+
+============================================================
+VERSIONING (snapshot / restore / list)
+============================================================
+This server keeps an AUTHORITATIVE in-memory model (IR) of the patch:
+every object and connection you create is recorded as structured data.
+The Pd canvas is a render target -- the server never reads Pd back. That
+model is what gets versioned and re-rendered.
+
+- pd_snapshot(label, branch?, checkpoints_dir?)
+    Serializes the current patch to JSON and commits it as a checkpoint
+    in a DEDICATED git repo (separate from any project repo). Use a
+    descriptive label; restore by it later. Use `branch` for sound
+    variants to A/B (e.g. branch="bright" vs branch="dark").
+- pd_restore(ref, checkpoints_dir?)
+    DESTRUCTIVE. Clears the canvas, then replays the checkpoint's objects
+    and connections deterministically from the IR. `ref` is a label, a
+    commit hash, or a branch name. Object ids are recompacted to 0..n-1
+    on restore (edges are remapped automatically) -- after a restore,
+    treat the ids from the restore as current.
+- pd_list_checkpoints(checkpoints_dir?)
+    Lists checkpoints across all branches (hash, label, date, refs).
+
+Where checkpoints live: pass `checkpoints_dir` (absolute) to keep them
+next to the user's project; otherwise the server uses PD_CHECKPOINTS_DIR
+or a bundled default. Pass the SAME dir across snapshot/restore/list in a
+session. ASK the user where they want checkpoints if it matters.
+
+Editing discipline this enables:
+- Structural change (add/remove object, rewire) -> snapshot, then build.
+  To undo, pd_restore the previous checkpoint (clear + replay).
+- Parameter change -> do NOT re-render. Keep the object live behind an
+  [r <name>] and pd_send_message a new value. Re-rendering is only for
+  structure.
+
+Two limits to know:
+- py4pd: restore recreates the [<name>] box but NOT the .pd_py file (it
+  must still be on disk), and py4pd's module cache may require a Pd
+  restart to pick up changed Python code.
+- Single canvas: the IR is flat -- nested subpatches are not modeled.
 
 ============================================================
 PYTHON IN PD (py4pd 1.2.3+ -- .pd_py classes)

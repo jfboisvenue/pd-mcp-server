@@ -119,9 +119,9 @@ def test_state_mark_initialized():
 
 def test_state_indexing_matches_creation_order():
     s = PatchState()
-    assert s.add("obj", "osc~ 440") == 0
-    assert s.add("obj", "dac~") == 1
-    assert s.add("msg", "1") == 2
+    assert s.add("obj", {"type": "osc~", "args": ["440"]}) == 0
+    assert s.add("obj", {"type": "dac~", "args": []}) == 1
+    assert s.add("msg", {"atoms": ["1"]}) == 2
     assert s.count() == 3
     assert s.next_index() == 3
     assert s.exists(1) and not s.exists(5)
@@ -129,32 +129,32 @@ def test_state_indexing_matches_creation_order():
 
 def test_state_clear_resets_indexing():
     s = PatchState()
-    s.add("obj", "osc~ 440")
-    s.add("obj", "dac~")
+    s.add("obj", {"type": "osc~", "args": ["440"]})
+    s.add("obj", {"type": "dac~", "args": []})
     s.clear()
     assert s.count() == 0
     assert s.next_index() == 0
-    assert s.add("obj", "phasor~") == 0  # numbering restarts, mirroring Pd
+    assert s.add("obj", {"type": "phasor~", "args": []}) == 0  # restarts, mirroring Pd
 
 
 def test_state_as_list_is_ordered():
     s = PatchState()
-    s.add("obj", "a")
-    s.add("msg", "b")
+    s.add("obj", {"type": "osc~", "args": ["440"]})
+    s.add("msg", {"atoms": ["bang"]})
     assert s.as_list() == [
-        {"id": 0, "kind": "obj", "text": "a"},
-        {"id": 1, "kind": "msg", "text": "b"},
+        {"id": 0, "kind": "obj", "text": "osc~ 440"},
+        {"id": 1, "kind": "msg", "text": "bang"},
     ]
 
 
 def test_state_resync_to_realigns_counter_and_clears_mirror():
     s = PatchState()
-    s.add("obj", "osc~ 440")
-    s.add("obj", "dac~")
+    s.add("obj", {"type": "osc~", "args": ["440"]})
+    s.add("obj", {"type": "dac~", "args": []})
     s.resync_to(7)
     assert s.count() == 0                     # mirror dropped (labels untrustworthy)
     assert s.next_index() == 7
-    assert s.add("obj", "phasor~") == 7       # next created object gets the new id
+    assert s.add("obj", {"type": "phasor~", "args": []}) == 7  # next gets the new id
 
 
 def test_state_resync_to_rejects_negative():

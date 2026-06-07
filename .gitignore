@@ -12,3 +12,5 @@ uv.lock
 .claude/settings.local.json
 # MCPB bundles are produced by CI on tag push, not committed.
 *.mcpb
+# Default snapshot/restore checkpoints repo (its own git history lives here).
+checkpoints/
