@@ -65,6 +65,15 @@ def test_branches_isolate_variants(tmp_path):
     assert versioning.read_ir_at(d, "base")["nodes"][0]["args"] == ["440"]
 
 
+def test_save_with_pd_text_commits_patch_pd(tmp_path):
+    d = tmp_path / "checkpoints"
+    versioning.save(d, _ir("440"), "base", pd_text="#N canvas 0 0 800 600 12;\n")
+    assert (d / "patch.pd").exists()
+    # patch.pd is part of the committed checkpoint, not just on disk.
+    committed = versioning._git(d, "show", "HEAD:patch.pd")
+    assert committed.startswith("#N canvas")
+
+
 def test_read_unknown_ref_raises(tmp_path):
     d = tmp_path / "checkpoints"
     versioning.save(d, _ir("440"), "base")

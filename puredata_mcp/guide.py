@@ -133,6 +133,11 @@ model is what gets versioned and re-rendered.
     treat the ids from the restore as current.
 - pd_list_checkpoints(checkpoints_dir?)
     Lists checkpoints across all branches (hash, label, date, refs).
+- pd_export_pd(path, ref?, checkpoints_dir?)
+    Writes a standalone, openable .pd file from the IR -- the current
+    patch, or a checkpoint when `ref` is given. Use it to hand a patch to
+    a human or to Claude Code. (Every pd_snapshot also writes a patch.pd
+    inside the checkpoint, so each checkpoint is openable too.)
 
 Where checkpoints live: pass `checkpoints_dir` (absolute) to keep them
 next to the user's project; otherwise the server uses PD_CHECKPOINTS_DIR

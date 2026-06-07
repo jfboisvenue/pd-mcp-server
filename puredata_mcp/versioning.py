@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import List, Optional
 
 PATCH_FILE = "patch.json"
+PD_FILE = "patch.pd"
 
 # Local-only identity so commits work without a configured global git user.
 _GIT_IDENTITY = [
@@ -109,11 +110,14 @@ def _has_commits(dir: Path) -> bool:
 # Public operations
 # --------------------------------------------------------------------------- #
 
-def save(dir: Path, ir: dict, label: str, branch: Optional[str] = None) -> dict:
+def save(dir: Path, ir: dict, label: str, branch: Optional[str] = None,
+         pd_text: Optional[str] = None) -> dict:
     """Write the IR to ``patch.json`` and commit it as a checkpoint.
 
     If ``branch`` is given, switch to it (creating it if new) before
-    committing. Returns ``{"hash", "branch", "label"}``.
+    committing. If ``pd_text`` is given, also write ``patch.pd`` so the
+    checkpoint ships an openable Pd file in the same commit. Returns
+    ``{"hash", "branch", "label"}``.
     """
     ensure_repo(dir)
 
@@ -124,6 +128,8 @@ def save(dir: Path, ir: dict, label: str, branch: Optional[str] = None) -> dict:
             _git(dir, "checkout", "-q", "-b", branch)
 
     (dir / PATCH_FILE).write_text(json.dumps(ir, indent=2) + "\n", encoding="utf-8")
+    if pd_text is not None:
+        (dir / PD_FILE).write_text(pd_text, encoding="utf-8")
 
     _git(dir, "add", "-A")
     # --allow-empty: a snapshot is always a checkpoint, even if the IR is

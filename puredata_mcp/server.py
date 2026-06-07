@@ -26,7 +26,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from mcp.server.fastmcp import FastMCP
 
-from . import builders, versioning
+from . import builders, pd_serialize, versioning
 from .fudi import FudiClient, FudiError
 from .guide import GUIDE
 from .patch_state import PatchState
@@ -371,6 +371,24 @@ class ListCheckpointsInput(BaseModel):
     checkpoints_dir: Optional[str] = Field(
         default=None,
         description="Absolute path to the checkpoints repo (see pd_snapshot).")
+
+
+class ExportPdInput(BaseModel):
+    """Export the IR to a standalone, openable .pd file."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    path: str = Field(..., min_length=1,
+                      description="Absolute path of the .pd file to write "
+                                  "(parent dirs are created).")
+    ref: Optional[str] = Field(
+        default=None,
+        description="Optional checkpoint to export instead of the current "
+                    "patch: a label, commit hash, or branch. If omitted, the "
+                    "current in-memory patch is exported.")
+    checkpoints_dir: Optional[str] = Field(
+        default=None,
+        description="Checkpoints repo to read `ref` from (see pd_snapshot). "
+                    "Only used when `ref` is given.")
 
 
 # --------------------------------------------------------------------------- #
@@ -879,8 +897,9 @@ async def pd_snapshot(params: SnapshotInput) -> str:
     if (gate := _require_init()): return gate
     try:
         checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
-        info = versioning.save(checkpoints_dir, _state.to_ir(),
-                               params.label, params.branch)
+        ir = _state.to_ir()
+        info = versioning.save(checkpoints_dir, ir, params.label, params.branch,
+                               pd_text=pd_serialize.ir_to_pd(ir))
         return _ok(
             f"Snapshot '{params.label}' committed ({info['hash']}) on branch "
             f"{info['branch']} -- {_state.count()} objects, "
@@ -939,6 +958,43 @@ async def pd_list_checkpoints(params: ListCheckpointsInput) -> str:
             "count": len(cps),
             "checkpoints": cps,
         }, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_export_pd",
+    annotations={"title": "Export Pd Patch File", "readOnlyHint": False,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": False},
+)
+async def pd_export_pd(params: ExportPdInput) -> str:
+    """Write a standalone, openable ``.pd`` file from the IR.
+
+    Exports the current in-memory patch, or a saved checkpoint when ``ref``
+    is given. The file opens directly in Pure Data and is versionable /
+    shareable. Object positions and wiring are reproduced; ids are
+    recompacted to 0..n-1.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        if params.ref:
+            checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+            ir = versioning.read_ir_at(checkpoints_dir, params.ref)
+        else:
+            ir = _state.to_ir()
+        out = Path(params.path).expanduser()
+        if not out.is_absolute():
+            out = out.resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(pd_serialize.ir_to_pd(ir), encoding="utf-8")
+        return _ok(
+            f"Exported {len(ir.get('nodes', []))} objects and "
+            f"{len(ir.get('edges', []))} connections to {out}.",
+            path=str(out),
+            nodes=len(ir.get("nodes", [])), edges=len(ir.get("edges", [])),
+            source=params.ref or "current",
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
