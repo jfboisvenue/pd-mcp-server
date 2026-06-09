@@ -27,6 +27,8 @@ bin/
 .github/
 tests/
 claude_desktop_config.example.json
+CLAUDE.md
+brief-mcp-puredata-versionning.md
 
 # Don't ship a .mcpb inside the .mcpb
 *.mcpb
