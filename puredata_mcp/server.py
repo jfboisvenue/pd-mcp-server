@@ -62,6 +62,38 @@ def _session_checkpoints_default() -> Optional[Path]:
     """The per-session checkpoints dir from the project binding, or None."""
     return (_PROJECT_DIR / "checkpoints") if _PROJECT_DIR is not None else None
 
+
+def _session_file() -> Optional[Path]:
+    """Rolling autosave file for the live IR, or None when no project is bound.
+
+    Distinct from snapshots: this is unsaved-work recovery (one rolling
+    file), not versioned history. Lives in the bound project dir so it
+    survives a server restart; recovered with pd_recover.
+    """
+    return (_PROJECT_DIR / ".pd_session.json") if _PROJECT_DIR is not None else None
+
+
+def _persist_session() -> None:
+    """Best-effort autosave of the current IR. Never raises into a tool.
+
+    Wired as _state.on_change, so every graph mutation rewrites the file
+    when a project is bound. A failed write (permissions, disk) must not
+    break the create/connect/etc. that triggered it.
+    """
+    path = _session_file()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(_state.to_ir(), indent=2), encoding="utf-8")
+        os.replace(tmp, path)  # atomic: never leave a half-written file
+    except OSError:
+        pass
+
+
+_state.on_change = _persist_session
+
 _PY_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
@@ -512,11 +544,32 @@ async def pd_init(params: InitInput = InitInput()) -> str:
         _PROJECT_DIR = p
     _state.mark_initialized()
     if _PROJECT_DIR is not None:
-        return (f"{GUIDE}\n\n[session bound to project: {_PROJECT_DIR}]\n"
+        note = (f"{GUIDE}\n\n[session bound to project: {_PROJECT_DIR}]\n"
                 f"Checkpoints default to {_PROJECT_DIR / 'checkpoints'}; "
                 f".pd_py scripts to {_PROJECT_DIR / 'scripts'}. Override per "
                 f"call with checkpoints_dir / scripts_dir.")
+        recover = _recoverable_summary()
+        if recover:
+            note += (f"\n\n[recoverable session found: {recover}] The live IR "
+                     "is autosaved here. Call pd_recover to clear the canvas and "
+                     "re-render this state, OR pd_clear_canvas to start fresh "
+                     "(which overwrites the autosave).")
+        return note
     return GUIDE
+
+
+def _recoverable_summary() -> Optional[str]:
+    """One-line count of a recoverable autosave, or None if absent/unreadable."""
+    path = _session_file()
+    if path is None or not path.exists():
+        return None
+    try:
+        ir = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return (f"{len(ir.get('nodes', []))} objects, "
+            f"{len(ir.get('edges', []))} connections, "
+            f"{len(ir.get('presets', {}))} presets")
 
 
 # --------------------------------------------------------------------------- #
@@ -1137,6 +1190,43 @@ async def pd_diff(params: DiffInput) -> str:
             pd_diff.format_diff(diff),
             from_ref=params.from_ref, to_ref=params.to_ref or "current",
             diff=diff,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_recover",
+    annotations={"title": "Recover Autosaved Pd Session", "readOnlyHint": False,
+                 "destructiveHint": True, "idempotentHint": True,
+                 "openWorldHint": True},
+)
+async def pd_recover() -> str:
+    """Re-render the autosaved working IR after a restart (clears first).
+
+    The live IR is autosaved to the bound project on every change. After a
+    server/Pd restart the canvas is empty but the model persists here; this
+    reloads it and re-renders deterministically (clear + replay, ids
+    recompacted to 0..n-1) so the canvas matches again. Requires a project
+    binding (pd_init(project_dir=...)). This is unsaved-work recovery, not a
+    checkpoint -- use pd_restore for a named/versioned state.
+    """
+    if (gate := _require_init()): return gate
+    if _PROJECT_DIR is None:
+        return ("Error: no project bound. Call pd_init(project_dir=...) first "
+                "so the server knows where the autosaved session lives.")
+    path = _session_file()
+    if path is None or not path.exists():
+        return (f"Error: no recoverable session at {path}. Nothing was "
+                "autosaved yet for this project.")
+    try:
+        ir = json.loads(path.read_text(encoding="utf-8"))
+        n_nodes, n_edges = _replay(ir)
+        return _ok(
+            f"Recovered autosaved session: re-rendered {n_nodes} objects and "
+            f"{n_edges} connections ({len(ir.get('presets', {}))} presets).",
+            session_file=str(path), nodes=n_nodes, edges=n_edges,
+            presets=len(ir.get("presets", {})),
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)

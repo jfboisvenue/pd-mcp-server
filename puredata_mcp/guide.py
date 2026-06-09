@@ -173,6 +173,20 @@ Two limits to know:
   restart to pick up changed Python code.
 - Single canvas: the IR is flat -- nested subpatches are not modeled.
 
+Autosave & crash recovery (only when project_dir is bound):
+The live IR is in memory and dies with the server process. When you bound
+a project_dir at pd_init, the server ALSO autosaves the IR to
+<project_dir>/.pd_session.json after every change -- a single rolling file,
+not versioned history. After a server or Pd restart the canvas is empty but
+that file survives, and pd_init will tell you a recoverable session exists.
+- pd_recover()
+    Reloads the autosaved IR and re-renders it (clear + replay, ids
+    recompacted) so the canvas matches your model again. Then pd_apply_preset
+    if you need the parameter values back. Requires a bound project.
+This is unsaved-work recovery; pd_snapshot/pd_restore is for named,
+versioned states. Without project_dir, nothing is autosaved -- snapshot
+explicitly or the work is lost on restart.
+
 ============================================================
 PRESETS / PARAMETER AUTOMATION (save / apply / list)
 ============================================================

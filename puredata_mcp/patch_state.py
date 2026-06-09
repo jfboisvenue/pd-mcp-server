@@ -22,7 +22,7 @@ just a human summary.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 IR_VERSION = 1
 DEFAULT_CANVAS = {"width": 800, "height": 600}
@@ -83,6 +83,15 @@ class PatchState:
     # version it alongside the graph.
     presets: Dict[str, Dict[str, list]] = field(default_factory=dict)
     initialized: bool = False
+    # Optional observer fired after every graph mutation. The server wires this
+    # to autosave the IR to disk when a project is bound; left None it is a
+    # no-op, so the model stays a pure data structure for tests.
+    on_change: Optional[Callable[[], None]] = field(
+        default=None, repr=False, compare=False)
+
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change()
 
     # -- init gate ------------------------------------------------------------
 
@@ -97,6 +106,7 @@ class PatchState:
         idx = self._next_index
         self.objects[idx] = PdObject(index=idx, kind=kind, params=dict(params))
         self._next_index += 1
+        self._changed()
         return idx
 
     # -- edges ----------------------------------------------------------------
@@ -106,17 +116,22 @@ class PatchState:
         edge = Edge(src, src_outlet, dst, dst_inlet)
         if edge.as_tuple() not in {e.as_tuple() for e in self.edges}:
             self.edges.append(edge)
+            self._changed()
 
     def remove_edge(self, src: int, src_outlet: int, dst: int, dst_inlet: int) -> None:
         """Forget a connection (idempotent: missing edge is a no-op)."""
         target = (src, src_outlet, dst, dst_inlet)
+        before = len(self.edges)
         self.edges = [e for e in self.edges if e.as_tuple() != target]
+        if len(self.edges) != before:
+            self._changed()
 
     # -- presets --------------------------------------------------------------
 
     def set_preset(self, name: str, params: Dict[str, list]) -> None:
         """Store (or overwrite) a named parameter preset: receiver -> atoms."""
         self.presets[name] = {recv: list(atoms) for recv, atoms in params.items()}
+        self._changed()
 
     def get_preset(self, name: str) -> Dict[str, list]:
         """Return a copy of a preset's receiver->atoms map (KeyError if absent)."""
@@ -140,6 +155,7 @@ class PatchState:
         self.edges.clear()
         self.presets.clear()
         self._next_index = 0
+        self._changed()
 
     def resync_to(self, next_index: int) -> None:
         """Realign the counter after the user hand-edits the canvas.
@@ -153,6 +169,7 @@ class PatchState:
         self.objects.clear()
         self.edges.clear()
         self._next_index = next_index
+        self._changed()
 
     # -- IR serialization -----------------------------------------------------
 
@@ -196,6 +213,7 @@ class PatchState:
             self.edges.append(Edge(edge["from"], edge["from_outlet"],
                                    edge["to"], edge["to_inlet"]))
         self._next_index = max_id + 1
+        self._changed()
 
     # -- queries --------------------------------------------------------------
 
