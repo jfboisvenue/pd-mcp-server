@@ -51,6 +51,17 @@ PD_SCRIPTS_DIR = Path(os.environ.get(
 _client = FudiClient(host=PD_HOST, port=PD_PORT)
 _state = PatchState()
 
+# Session-scoped project binding, set by pd_init(project_dir=...). When set,
+# it becomes the DEFAULT location for this patch's checkpoints repo
+# (<project_dir>/checkpoints) and .pd_py scripts (<project_dir>/scripts), so
+# each patch/project gets its own versioning instead of one shared repo.
+_PROJECT_DIR: Optional[Path] = None
+
+
+def _session_checkpoints_default() -> Optional[Path]:
+    """The per-session checkpoints dir from the project binding, or None."""
+    return (_PROJECT_DIR / "checkpoints") if _PROJECT_DIR is not None else None
+
 _PY_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
@@ -75,8 +86,10 @@ def _resolve_scripts_dir(explicit: Optional[str]) -> Path:
          agent should ask the user where their Pd patch lives and pass
          the corresponding scripts folder so the .py file lands next to
          the patch, not inside the plugin's install dir).
-      2. ``PD_SCRIPTS_DIR`` env var (per-session/global override).
-      3. The plugin's bundled ``pd/scripts/`` (only correct when the user
+      2. The session project binding from ``pd_init(project_dir=...)``,
+         i.e. ``<project_dir>/scripts`` -- set once, applies all session.
+      3. ``PD_SCRIPTS_DIR`` env var (per-session/global override).
+      4. The plugin's bundled ``pd/scripts/`` (only correct when the user
          is also using the bundled mcp_host.pd -- avoid this for shipped
          setups).
 
@@ -86,6 +99,10 @@ def _resolve_scripts_dir(explicit: Optional[str]) -> Path:
         p = Path(explicit).expanduser()
         if not p.is_absolute():
             p = p.resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    if _PROJECT_DIR is not None:
+        p = _PROJECT_DIR / "scripts"
         p.mkdir(parents=True, exist_ok=True)
         return p
     return _ensure_scripts_dir()
@@ -116,6 +133,22 @@ def _require_init() -> Optional[str]:
 # --------------------------------------------------------------------------- #
 # Input models
 # --------------------------------------------------------------------------- #
+
+class InitInput(BaseModel):
+    """Initialize the session, optionally binding it to a project directory."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    project_dir: Optional[str] = Field(
+        default=None,
+        description="Absolute path to THIS patch's project folder. Binds the "
+                    "session so each patch gets its OWN versioning: checkpoints "
+                    "default to <project_dir>/checkpoints and .pd_py scripts to "
+                    "<project_dir>/scripts. ASK the user where their patch lives "
+                    "and pass it here on the first call. Omit to fall back to "
+                    "the PD_CHECKPOINTS_DIR / PD_SCRIPTS_DIR env vars then the "
+                    "bundled defaults -- a single shared repo, which mixes "
+                    "unrelated patches' history together.")
+
 
 class CreateObjectInput(BaseModel):
     """Create a Pd object box (``[type args...]``) on the canvas."""
@@ -455,7 +488,7 @@ class ApplyPresetInput(BaseModel):
                  "destructiveHint": False, "idempotentHint": True,
                  "openWorldHint": False},
 )
-async def pd_init() -> str:
+async def pd_init(params: InitInput = InitInput()) -> str:
     """**MANDATORY FIRST CALL.** Return the orientation guide for this MCP.
 
     Every other tool refuses to run until this is called. The guide covers
@@ -463,10 +496,26 @@ async def pd_init() -> str:
     single-object delete, manual edits drift ids), and a cookbook of
     common patches. Read it before doing anything else.
 
+    Pass ``project_dir`` (absolute) to bind this session to the patch's
+    project folder, so its checkpoints and .pd_py scripts live with it and
+    each patch keeps its own versioning. Re-calling without it preserves an
+    earlier binding.
+
     Returns:
         Plain-text guide. The server also marks this session as initialized.
     """
+    global _PROJECT_DIR
+    if params.project_dir:
+        p = Path(params.project_dir).expanduser()
+        p = p if p.is_absolute() else p.resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        _PROJECT_DIR = p
     _state.mark_initialized()
+    if _PROJECT_DIR is not None:
+        return (f"{GUIDE}\n\n[session bound to project: {_PROJECT_DIR}]\n"
+                f"Checkpoints default to {_PROJECT_DIR / 'checkpoints'}; "
+                f".pd_py scripts to {_PROJECT_DIR / 'scripts'}. Override per "
+                f"call with checkpoints_dir / scripts_dir.")
     return GUIDE
 
 
@@ -955,7 +1004,8 @@ async def pd_snapshot(params: SnapshotInput) -> str:
     """
     if (gate := _require_init()): return gate
     try:
-        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        checkpoints_dir = versioning.resolve_checkpoints_dir(
+            params.checkpoints_dir, _session_checkpoints_default())
         ir = _state.to_ir()
         info = versioning.save(checkpoints_dir, ir, params.label, params.branch,
                                pd_text=pd_serialize.ir_to_pd(ir))
@@ -988,7 +1038,8 @@ async def pd_restore(params: RestoreInput) -> str:
     """
     if (gate := _require_init()): return gate
     try:
-        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        checkpoints_dir = versioning.resolve_checkpoints_dir(
+            params.checkpoints_dir, _session_checkpoints_default())
         ir = versioning.read_ir_at(checkpoints_dir, params.ref)
         n_nodes, n_edges = _replay(ir)
         return _ok(
@@ -1010,7 +1061,8 @@ async def pd_list_checkpoints(params: ListCheckpointsInput) -> str:
     """List checkpoints (across all branches) in the checkpoints repo."""
     if (gate := _require_init()): return gate
     try:
-        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        checkpoints_dir = versioning.resolve_checkpoints_dir(
+            params.checkpoints_dir, _session_checkpoints_default())
         cps = versioning.list_checkpoints(checkpoints_dir)
         return json.dumps({
             "checkpoints_dir": str(checkpoints_dir),
@@ -1038,7 +1090,8 @@ async def pd_export_pd(params: ExportPdInput) -> str:
     if (gate := _require_init()): return gate
     try:
         if params.ref:
-            checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+            checkpoints_dir = versioning.resolve_checkpoints_dir(
+                params.checkpoints_dir, _session_checkpoints_default())
             ir = versioning.read_ir_at(checkpoints_dir, params.ref)
         else:
             ir = _state.to_ir()
@@ -1074,7 +1127,8 @@ async def pd_diff(params: DiffInput) -> str:
     """
     if (gate := _require_init()): return gate
     try:
-        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        checkpoints_dir = versioning.resolve_checkpoints_dir(
+            params.checkpoints_dir, _session_checkpoints_default())
         old = versioning.read_ir_at(checkpoints_dir, params.from_ref)
         new = (versioning.read_ir_at(checkpoints_dir, params.to_ref)
                if params.to_ref else _state.to_ir())

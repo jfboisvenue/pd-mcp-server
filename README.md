@@ -187,7 +187,7 @@ conventions from individual tool docstrings.
 
 | Tool | What it does |
 |------|--------------|
-| `pd_init` | **Mandatory first call.** Returns the orientation guide and unlocks the rest |
+| `pd_init` | **Mandatory first call.** Returns the orientation guide and unlocks the rest; pass `project_dir` to bind the session so this patch gets its own checkpoints/scripts |
 | `pd_create_object` | Create `[type args…]` at (x,y); returns its id |
 | `pd_create_message` | Create a message box `[atoms…(` |
 | `pd_create_comment` | Create a text comment (spaces preserved) |
@@ -216,9 +216,12 @@ conventions from individual tool docstrings.
 
 `pd_snapshot` … `pd_diff` are the **versioning layer**: the server holds an
 authoritative in-memory model of the patch (the IR) and serializes *to* `.pd`,
-never parses *from* it. Checkpoints live in their own git repo (default
-`<project>/checkpoints/`, gitignored), each commit pairing `patch.json` (the IR)
-with `patch.pd` (the openable file). Branches double as A/B sound variants.
+never parses *from* it. Each patch gets **its own checkpoints repo** — bind it
+once with `pd_init(project_dir="/path/to/patch")` and checkpoints land in
+`<project_dir>/checkpoints/` (and `.pd_py` scripts in `<project_dir>/scripts/`).
+Without a binding, the server falls back to `PD_CHECKPOINTS_DIR` then a single
+bundled `checkpoints/` shared across patches. Each commit pairs `patch.json`
+(the IR) with `patch.pd` (the openable file); branches double as A/B variants.
 
 `pd_save_preset` … `pd_list_presets` are the **presets layer**: build your patch
 so every tweakable parameter is fed by an `[r <name>]`, and parameter values

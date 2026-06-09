@@ -45,7 +45,7 @@ THE ID CONTRACT (critical)
 ============================================================
 TYPICAL WORKFLOW
 ============================================================
-1. pd_init                              (you are here)
+1. pd_init(project_dir="...")           (you are here -- bind the project)
 2. pd_get_state                         (check what is already there)
 3. pd_create_object / pd_create_message / pd_create_<gui>
 4. pd_connect    (use ids returned by step 3)
@@ -145,10 +145,20 @@ model is what gets versioned and re-rendered.
     checkpoint vs the current patch (omit to_ref). Great for seeing what
     distinguishes two A/B variants on different branches.
 
-Where checkpoints live: pass `checkpoints_dir` (absolute) to keep them
-next to the user's project; otherwise the server uses PD_CHECKPOINTS_DIR
-or a bundled default. Pass the SAME dir across snapshot/restore/list in a
-session. ASK the user where they want checkpoints if it matters.
+Where checkpoints live -- ONE PROJECT, ONE REPO:
+The best way to scope versioning per patch is to call pd_init with a
+project_dir at the very start:
+    pd_init(project_dir="/abs/path/to/this/patch")
+That BINDS the session: checkpoints then default to
+<project_dir>/checkpoints and .pd_py scripts to <project_dir>/scripts, so
+this patch keeps its own git history -- no need to pass checkpoints_dir on
+every call. ASK the user where their patch lives and pass it.
+
+If you skip project_dir, the server falls back to the PD_CHECKPOINTS_DIR
+env var, then a bundled default -- a SINGLE shared repo that mixes
+unrelated patches' history (and collides branch names) across projects.
+You can still pass `checkpoints_dir` per call to override the binding for
+a one-off; pass the SAME dir across snapshot/restore/list/diff.
 
 Editing discipline this enables:
 - Structural change (add/remove object, rewire) -> snapshot, then build.
@@ -259,12 +269,12 @@ Canonical template (give this to the user as the starting point):
           self.out(0, pd.LIST, result)     # send out outlet 0
 
 Where the .pd_py file lands:
-  pd_create_python_object and pd_update_python_script accept an
-  optional `scripts_dir` argument (absolute path). RECOMMENDED: at the
-  start of a session where Python is involved, ASK THE USER where their
-  Pd patch lives and pass <patch-dir>/scripts (or wherever they want
-  Python classes kept). Remember that value and pass it on every
-  subsequent Python-tool call in the session.
+  If you bound the session with pd_init(project_dir=...), scripts default
+  to <project_dir>/scripts automatically -- nothing more to pass.
+  Otherwise pd_create_python_object and pd_update_python_script accept an
+  optional `scripts_dir` argument (absolute path): ASK THE USER where
+  their Pd patch lives and pass <patch-dir>/scripts, then reuse that value
+  on every subsequent Python-tool call in the session.
 
   The user's patch must contain BOTH:
     [declare -path <scripts dir>]    so py4pd finds <name>.pd_py

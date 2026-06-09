@@ -45,14 +45,20 @@ class VersioningError(RuntimeError):
 # Directory resolution (mirrors server._resolve_scripts_dir)
 # --------------------------------------------------------------------------- #
 
-def resolve_checkpoints_dir(explicit: Optional[str]) -> Path:
+def resolve_checkpoints_dir(explicit: Optional[str],
+                            session_default: Optional[Path] = None) -> Path:
     """Pick the checkpoints directory for this call.
 
-    Precedence: explicit arg -> ``PD_CHECKPOINTS_DIR`` env -> bundled
-    ``<project>/checkpoints``. Returns an absolute, existing path.
+    Precedence: explicit arg -> session project binding (``session_default``,
+    set by ``pd_init(project_dir=...)`` so each patch gets its own repo) ->
+    ``PD_CHECKPOINTS_DIR`` env -> bundled ``<plugin>/checkpoints``. Returns an
+    absolute, existing path.
     """
     if explicit:
         p = Path(explicit).expanduser()
+        p = p if p.is_absolute() else p.resolve()
+    elif session_default is not None:
+        p = Path(session_default).expanduser()
         p = p if p.is_absolute() else p.resolve()
     elif os.environ.get("PD_CHECKPOINTS_DIR"):
         p = Path(os.environ["PD_CHECKPOINTS_DIR"]).expanduser()
