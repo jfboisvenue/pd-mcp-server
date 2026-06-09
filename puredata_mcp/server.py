@@ -92,6 +92,46 @@ def _persist_session() -> None:
         pass
 
 
+def _presets_file() -> Optional[Path]:
+    """Per-project preset library file, or None when no project is bound.
+
+    Unlike the autosave session file, this is a DURABLE, human-readable
+    library: one JSON map {name: {receiver: atoms}} the user can open, and
+    that pd_init reloads automatically (presets imply no canvas objects, so
+    hydrating them is safe without a re-render).
+    """
+    return (_PROJECT_DIR / "presets.json") if _PROJECT_DIR is not None else None
+
+
+def _persist_presets() -> None:
+    """Best-effort write of the preset library to <project_dir>/presets.json."""
+    path = _presets_file()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        library = {name: _state.get_preset(name) for name in _state.preset_names()}
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(library, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _load_presets_from_disk() -> int:
+    """Hydrate the preset library from <project_dir>/presets.json. Returns count."""
+    path = _presets_file()
+    if path is None or not path.exists():
+        return 0
+    try:
+        library = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(library, dict):
+            _state.load_presets(library)
+    except (OSError, ValueError):
+        return 0
+    return _state.preset_count()
+
+
 _state.on_change = _persist_session
 
 _PY_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -544,10 +584,14 @@ async def pd_init(params: InitInput = InitInput()) -> str:
         _PROJECT_DIR = p
     _state.mark_initialized()
     if _PROJECT_DIR is not None:
+        n_presets = _load_presets_from_disk()  # hydrate the durable library
         note = (f"{GUIDE}\n\n[session bound to project: {_PROJECT_DIR}]\n"
                 f"Checkpoints default to {_PROJECT_DIR / 'checkpoints'}; "
                 f".pd_py scripts to {_PROJECT_DIR / 'scripts'}. Override per "
                 f"call with checkpoints_dir / scripts_dir.")
+        if n_presets:
+            note += (f"\nLoaded {n_presets} preset(s) from "
+                     f"{_PROJECT_DIR / 'presets.json'} -- see pd_list_presets.")
         recover = _recoverable_summary()
         if recover:
             note += (f"\n\n[recoverable session found: {recover}] The live IR "
@@ -1254,10 +1298,12 @@ async def pd_save_preset(params: SavePresetInput) -> str:
     if (gate := _require_init()): return gate
     try:
         _state.set_preset(params.name, params.params)
+        _persist_presets()  # durable per-project library (presets.json)
         return _ok(
             f"Preset '{params.name}' saved ({len(params.params)} parameter(s)).",
             name=params.name, params=params.params,
             preset_count=_state.preset_count(),
+            presets_file=str(_presets_file()) if _presets_file() else None,
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)

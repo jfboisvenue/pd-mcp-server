@@ -137,6 +137,14 @@ class PatchState:
         """Return a copy of a preset's receiver->atoms map (KeyError if absent)."""
         return {recv: list(atoms) for recv, atoms in self.presets[name].items()}
 
+    def load_presets(self, presets: Dict[str, Dict[str, list]]) -> None:
+        """Replace the preset library wholesale (used to hydrate from presets.json).
+
+        Does NOT fire on_change: this is a load, not a user edit.
+        """
+        self.presets = {name: {recv: list(atoms) for recv, atoms in m.items()}
+                        for name, m in presets.items()}
+
     def preset_names(self) -> List[str]:
         return sorted(self.presets)
 
@@ -146,14 +154,14 @@ class PatchState:
     # -- lifecycle ------------------------------------------------------------
 
     def clear(self) -> None:
-        """Mirror a Pd ``clear``: drop everything and reset indexing.
+        """Mirror a Pd ``clear``: drop the graph and reset indexing.
 
-        Presets are part of this patch's state and target receivers in this
-        graph, so a blank canvas drops them too.
+        Presets are NOT touched -- they are a durable per-project library of
+        values to push at named receivers, reusable when you rebuild the
+        canvas, so a clear (rebuild) keeps them.
         """
         self.objects.clear()
         self.edges.clear()
-        self.presets.clear()
         self._next_index = 0
         self._changed()
 

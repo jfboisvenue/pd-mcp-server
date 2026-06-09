@@ -60,12 +60,13 @@ def test_preset_and_clear_are_autosaved(tmp_path, monkeypatch):
     st = _fresh_bound_state(server, tmp_path, monkeypatch)
     session = tmp_path / ".pd_session.json"
 
+    st.add("obj", {"type": "osc~", "args": ["1"], "x": 0, "y": 0})
     st.set_preset("bright", {"freq": ["880"]})
     assert json.loads(session.read_text())["presets"] == {"bright": {"freq": ["880"]}}
 
-    st.clear()  # clearing is a state worth persisting too
+    st.clear()  # clearing the graph is autosaved, but keeps the preset library
     saved = json.loads(session.read_text())
-    assert saved["nodes"] == [] and saved["presets"] == {}
+    assert saved["nodes"] == [] and saved["presets"] == {"bright": {"freq": ["880"]}}
 
 
 def test_no_autosave_when_unbound(tmp_path, monkeypatch):

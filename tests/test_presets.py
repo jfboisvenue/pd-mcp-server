@@ -75,11 +75,15 @@ def test_load_ir_tolerates_missing_presets_key():
     assert st.preset_count() == 0
 
 
-def test_clear_wipes_presets():
+def test_clear_keeps_presets():
+    # Presets are a durable per-project library, not canvas state: clearing
+    # the graph (to rebuild) must not erase them.
     st = PatchState()
     st.set_preset("p", {"freq": ["440"]})
+    st.add("obj", {"type": "osc~", "args": ["1"], "x": 0, "y": 0})
     st.clear()
-    assert st.preset_count() == 0
+    assert st.count() == 0
+    assert st.get_preset("p") == {"freq": ["440"]}
 
 
 # --------------------------------------------------------------------------- #
@@ -179,3 +183,65 @@ def test_presets_survive_replay(monkeypatch):
         pd.wait_for(2)
 
     assert server._state.get_preset("bright") == {"freq": ["880"]}
+
+
+# --------------------------------------------------------------------------- #
+# Per-project presets.json library
+# --------------------------------------------------------------------------- #
+
+def test_save_preset_writes_presets_json(tmp_path, monkeypatch):
+    import asyncio
+    import json as _json
+    server = _server_or_skip()
+    from puredata_mcp.server import pd_save_preset, SavePresetInput
+    monkeypatch.setattr(server, "_PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(server, "_state", PatchState())
+    server._state.initialized = True
+
+    asyncio.run(pd_save_preset(SavePresetInput(
+        name="bright", params={"freq": ["880"]})))
+
+    lib = tmp_path / "presets.json"
+    assert lib.exists()
+    assert _json.loads(lib.read_text()) == {"bright": {"freq": ["880"]}}
+
+
+def test_pd_init_loads_presets_json(tmp_path, monkeypatch):
+    import asyncio
+    import json as _json
+    server = _server_or_skip()
+    from puredata_mcp.server import pd_init, pd_list_presets, InitInput
+    monkeypatch.setattr(server, "_PROJECT_DIR", None)
+    monkeypatch.setattr(server, "_state", PatchState())
+
+    (tmp_path / "presets.json").write_text(_json.dumps({
+        "warm": {"freq": ["220"], "cutoff": ["1200"]},
+    }))
+
+    out = asyncio.run(pd_init(InitInput(project_dir=str(tmp_path))))
+    assert "Loaded 1 preset(s)" in out
+    listed = _json.loads(asyncio.run(pd_list_presets()))
+    assert listed["presets"]["warm"] == {"freq": ["220"], "cutoff": ["1200"]}
+
+
+def test_presets_library_survives_clear_via_tool(tmp_path, monkeypatch):
+    """Clearing the canvas keeps the preset library (and its file)."""
+    import asyncio
+    import json as _json
+    server = _server_or_skip()
+    from puredata_mcp.server import pd_save_preset, pd_clear_canvas, SavePresetInput
+    st = PatchState()
+    st.on_change = server._persist_session
+    monkeypatch.setattr(server, "_PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(server, "_state", st)
+    server._state.initialized = True
+
+    asyncio.run(pd_save_preset(SavePresetInput(name="p", params={"freq": ["1"]})))
+
+    with MockPd() as pd:
+        monkeypatch.setattr(server, "_client", FudiClient(port=pd.port))
+        asyncio.run(pd_clear_canvas())
+        pd.wait_for(1)
+
+    assert server._state.get_preset("p") == {"freq": ["1"]}
+    assert _json.loads((tmp_path / "presets.json").read_text()) == {"p": {"freq": ["1"]}}

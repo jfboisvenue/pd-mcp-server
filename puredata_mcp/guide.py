@@ -203,8 +203,13 @@ Then values become data you can name and snapshot, not structure.
 - pd_save_preset(name, params)
     params is {receiver: [atoms]}, e.g.
       pd_save_preset("bright", {"freq": ["880"], "cutoff": ["4000"]})
-    Stored IN THE IR, so the next pd_snapshot versions it with the graph.
-    Re-saving a name overwrites it.
+    Re-saving a name overwrites it. Presets are a DURABLE PER-PROJECT
+    LIBRARY: when a project is bound, each save also writes
+    <project_dir>/presets.json (a human-readable {name: {receiver: atoms}}
+    file the user can open), and pd_init reloads it automatically next
+    session -- no pd_recover needed, because presets imply no canvas
+    objects. They also ride in the IR, so pd_snapshot versions them too,
+    and pd_clear_canvas keeps them (a library, not canvas state).
 - pd_apply_preset(name)
     Re-sends every receiver->atoms pair into the live patch. The matching
     [r <name>] objects must exist (they do after a pd_restore, which

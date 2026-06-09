@@ -237,9 +237,15 @@ remain the way to keep named, versioned states.
 
 `pd_save_preset` … `pd_list_presets` are the **presets layer**: build your patch
 so every tweakable parameter is fed by an `[r <name>]`, and parameter values
-become data you can name, recall, and version. A preset rides in the IR, so a
-snapshot captures it with the graph; recalling one is a pure message send, never
-a re-render. See `pd_init`'s guide for the full workflow.
+become data you can name, recall, and version. Recalling a preset is a pure
+message send, never a re-render. When a `project_dir` is bound, presets form a
+**durable per-project library** at `<project_dir>/presets.json` — a plain,
+human-readable `{name: {receiver: atoms}}` file you can open, written on every
+save and reloaded automatically at `pd_init` (presets imply no canvas objects,
+so hydrating them is safe without a re-render). They also ride in the IR, so
+snapshots version them and `pd_clear_canvas` keeps them. Unlike the transient
+`.pd_session.json`, `presets.json` is meaningful data — fine to commit to your
+project repo. See `pd_init`'s guide for the full workflow.
 
 Python class files (`.pd_py`) written by `pd_create_python_object` live in
 `pd/scripts/` by default, which the host patch declares via
