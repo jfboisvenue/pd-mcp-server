@@ -3,7 +3,10 @@
 A reliable [Model Context Protocol](https://modelcontextprotocol.io) server for
 [Pure Data](https://puredata.info). It lets an MCP client (Claude Desktop, etc.)
 build and drive Pd patches in natural language: create objects, wire them
-together, toggle audio, and send live messages into a running patch.
+together, toggle audio, and send live messages into a running patch. It also
+keeps an authoritative in-memory model of the patch, so it can **version** your
+work — git-backed checkpoints, standalone `.pd` export, and a musical
+graph-level diff between versions.
 
 ## Why this design is reliable
 
@@ -43,9 +46,9 @@ formats so each lands cleanly:
 
 | Client | How to install | What it activates |
 |---|---|---|
-| **Claude Code** (CLI REPL) | inside a `claude` session: `/plugin marketplace add jfboisvenue/pd-mcp-server` then `/plugin install puredata@puredata-marketplace` | Skill auto-load + 18 MCP tools |
-| **Claude Desktop — Cowork sessions** | Plugins panel → **"Add from repository"** → paste `https://github.com/jfboisvenue/pd-mcp-server` | Skill auto-load + 18 MCP tools (Cowork chat only) |
-| **Claude Desktop — regular chat** | Download `puredata-mcp.mcpb` from [Releases](https://github.com/jfboisvenue/pd-mcp-server/releases) → double-click → Install via **Settings → Extensions** | 18 MCP tools (no skill — the plugin/skill format isn't loaded by this channel) |
+| **Claude Code** (CLI REPL) | inside a `claude` session: `/plugin marketplace add jfboisvenue/pd-mcp-server` then `/plugin install puredata@puredata-marketplace` | Skill auto-load + 23 MCP tools |
+| **Claude Desktop — Cowork sessions** | Plugins panel → **"Add from repository"** → paste `https://github.com/jfboisvenue/pd-mcp-server` | Skill auto-load + 23 MCP tools (Cowork chat only) |
+| **Claude Desktop — regular chat** | Download `puredata-mcp.mcpb` from [Releases](https://github.com/jfboisvenue/pd-mcp-server/releases) → double-click → Install via **Settings → Extensions** | 23 MCP tools (no skill — the plugin/skill format isn't loaded by this channel) |
 
 You can install both — the plugin (Code + Cowork) and the `.mcpb`
 (regular Desktop chat) coexist, share the same source code, and don't
@@ -202,6 +205,18 @@ conventions from individual tool docstrings.
 | `pd_clear_canvas` | Delete everything; reset ids to 0 |
 | `pd_resync_index` | Realign the id counter after a manual canvas edit |
 | `pd_get_state` | List objects the server has created |
+| `pd_snapshot` | Commit the current patch as a git-backed checkpoint (use `branch` to A/B sound variants) |
+| `pd_restore` | Re-render the canvas from a saved checkpoint (clears first), addressed by label/hash/branch |
+| `pd_list_checkpoints` | List all checkpoints across branches in the checkpoints repo |
+| `pd_export_pd` | Write a standalone, openable `.pd` file from the current patch or a checkpoint |
+| `pd_diff` | Musical graph-level diff between two checkpoints, or a checkpoint vs. the live patch |
+
+The last five are the **versioning layer**: the server holds an authoritative
+in-memory model of the patch (the IR) and serializes *to* `.pd`, never parses
+*from* it. Checkpoints live in their own git repo (default `<project>/checkpoints/`,
+gitignored), each commit pairing `patch.json` (the IR) with `patch.pd` (the
+openable file). Branches double as A/B sound variants. See `pd_init`'s guide
+for the full workflow.
 
 Python class files (`.pd_py`) written by `pd_create_python_object` live in
 `pd/scripts/` by default, which the host patch declares via
@@ -271,8 +286,13 @@ pd-mcp-server/
 │   ├── server.py               # FastMCP server + tools + init gate
 │   ├── guide.py                # orientation guide returned by pd_init
 │   ├── fudi.py                 # FUDI TCP client + escaping
-│   └── patch_state.py          # creation-index mirror + init flag
+│   ├── patch_state.py          # authoritative IR (nodes/edges) + init flag
+│   ├── builders.py             # single source of truth for the wire/file format
+│   ├── versioning.py           # git-backed snapshot/restore (dedicated repo)
+│   ├── pd_serialize.py         # IR -> standalone .pd text
+│   └── pd_diff.py              # graph-level diff + musical formatting
 ├── pd/mcp_host.pd              # the Pd host patch (open this in Pd)
+├── checkpoints/                # versioning git repo (gitignored, auto-created)
 ├── pd/scripts/                 # .pd_py files dropped by pd_create_python_object
 ├── tests/                      # mock-Pd round-trip + unit tests
 ├── pyproject.toml
