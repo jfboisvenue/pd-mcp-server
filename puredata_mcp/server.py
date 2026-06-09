@@ -21,7 +21,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from mcp.server.fastmcp import FastMCP
@@ -406,6 +406,43 @@ class DiffInput(BaseModel):
     checkpoints_dir: Optional[str] = Field(
         default=None,
         description="Absolute path to the checkpoints repo (see pd_snapshot).")
+
+
+class SavePresetInput(BaseModel):
+    """Save a named bag of parameter values (receiver -> atoms)."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=120,
+                      description="Preset name to save under (overwrites if it "
+                                  "exists). Recall later with pd_apply_preset.")
+    params: Dict[str, List[str]] = Field(
+        ..., min_length=1,
+        description="Map of receiver name -> atoms, e.g. "
+                    "{'freq': ['440'], 'cutoff': ['800']}. Each key must match an "
+                    "[r <name>] in the patch; applying re-sends these values. "
+                    "Build your patch so every tweakable parameter lives behind "
+                    "an [r <name>] -- then presets are pure message sends, never "
+                    "a re-render.")
+
+    @field_validator("params")
+    @classmethod
+    def _valid_params(cls, v: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        for recv, atoms in v.items():
+            if not recv or any(c.isspace() for c in recv):
+                raise ValueError(f"receiver name {recv!r} must be non-empty and "
+                                 "contain no whitespace")
+            if not atoms:
+                raise ValueError(f"receiver {recv!r} has no atoms; give it at "
+                                 "least one value")
+        return v
+
+
+class ApplyPresetInput(BaseModel):
+    """Re-send a saved preset's parameter values into the live patch."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=120,
+                      description="Name of a saved preset (see pd_list_presets).")
 
 
 # --------------------------------------------------------------------------- #
@@ -893,6 +930,11 @@ def _replay(ir: dict) -> tuple[int, int]:
                    "id": id_map[node["id"]]} for node in nodes],
         "edges": [{"from": s, "from_outlet": so, "to": d, "to_inlet": di}
                   for (s, so, d, di) in rendered_edges],
+        # Presets are receiver-name keyed, not id keyed, so recompaction
+        # leaves them untouched -- carry them through verbatim. Restore keeps
+        # the definitions but does NOT auto-apply them (the agent recalls a
+        # preset explicitly with pd_apply_preset).
+        "presets": ir.get("presets", {}),
     }
     _state.load_ir(compacted)
     return len(nodes), len(rendered_edges)
@@ -1044,6 +1086,84 @@ async def pd_diff(params: DiffInput) -> str:
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
+
+
+# --------------------------------------------------------------------------- #
+# Presets / automation -- named parameter recall (non-destructive)
+# --------------------------------------------------------------------------- #
+
+@mcp.tool(
+    name="pd_save_preset",
+    annotations={"title": "Save Pd Parameter Preset", "readOnlyHint": False,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": False},
+)
+async def pd_save_preset(params: SavePresetInput) -> str:
+    """Save a named set of parameter values (receiver -> atoms).
+
+    A preset captures the values you want at named [r <name>] receivers --
+    e.g. {'freq': ['440'], 'cutoff': ['800']}. It is stored in the IR, so
+    pd_snapshot versions it with the graph. Recall it with pd_apply_preset
+    (a pure message send -- no re-render). Saving an existing name
+    overwrites it.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        _state.set_preset(params.name, params.params)
+        return _ok(
+            f"Preset '{params.name}' saved ({len(params.params)} parameter(s)).",
+            name=params.name, params=params.params,
+            preset_count=_state.preset_count(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_apply_preset",
+    annotations={"title": "Apply Pd Parameter Preset", "readOnlyHint": False,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": True},
+)
+async def pd_apply_preset(params: ApplyPresetInput) -> str:
+    """Re-send a saved preset's values into the live patch (non-destructive).
+
+    Sends each receiver -> atoms via the same channel as pd_send_message.
+    The matching [r <name>] objects must exist on the canvas (after a
+    pd_restore they do, since restore re-renders the graph). Never
+    re-renders -- this is parameter recall, not a structural change.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        try:
+            preset = _state.get_preset(params.name)
+        except KeyError:
+            return (f"Error: no preset named '{params.name}'. "
+                    f"Known presets: {_state.preset_names()}.")
+        for receiver, atoms in preset.items():
+            _client.send_atoms(["__send", receiver, *atoms])
+        return _ok(
+            f"Applied preset '{params.name}': sent {len(preset)} parameter(s).",
+            name=params.name, params=preset,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_list_presets",
+    annotations={"title": "List Pd Parameter Presets", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": False},
+)
+async def pd_list_presets() -> str:
+    """List saved parameter presets and their values (receiver -> atoms)."""
+    if (gate := _require_init()): return gate
+    return json.dumps({
+        "count": _state.preset_count(),
+        "presets": {name: _state.get_preset(name)
+                    for name in _state.preset_names()},
+    }, indent=2)
 
 
 def main() -> None:

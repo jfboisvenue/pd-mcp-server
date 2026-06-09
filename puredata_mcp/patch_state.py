@@ -77,6 +77,11 @@ class PatchState:
     _next_index: int = 0
     objects: Dict[int, PdObject] = field(default_factory=dict)
     edges: List[Edge] = field(default_factory=list)
+    # Named parameter presets: name -> {receiver: [atoms]}. A preset is a
+    # bag of values to push at named [r <name>] receivers -- recalling it is
+    # pure pd_send_message, never a re-render. Rides in the IR, so snapshots
+    # version it alongside the graph.
+    presets: Dict[str, Dict[str, list]] = field(default_factory=dict)
     initialized: bool = False
 
     # -- init gate ------------------------------------------------------------
@@ -107,12 +112,33 @@ class PatchState:
         target = (src, src_outlet, dst, dst_inlet)
         self.edges = [e for e in self.edges if e.as_tuple() != target]
 
+    # -- presets --------------------------------------------------------------
+
+    def set_preset(self, name: str, params: Dict[str, list]) -> None:
+        """Store (or overwrite) a named parameter preset: receiver -> atoms."""
+        self.presets[name] = {recv: list(atoms) for recv, atoms in params.items()}
+
+    def get_preset(self, name: str) -> Dict[str, list]:
+        """Return a copy of a preset's receiver->atoms map (KeyError if absent)."""
+        return {recv: list(atoms) for recv, atoms in self.presets[name].items()}
+
+    def preset_names(self) -> List[str]:
+        return sorted(self.presets)
+
+    def preset_count(self) -> int:
+        return len(self.presets)
+
     # -- lifecycle ------------------------------------------------------------
 
     def clear(self) -> None:
-        """Mirror a Pd ``clear``: drop everything and reset indexing."""
+        """Mirror a Pd ``clear``: drop everything and reset indexing.
+
+        Presets are part of this patch's state and target receivers in this
+        graph, so a blank canvas drops them too.
+        """
         self.objects.clear()
         self.edges.clear()
+        self.presets.clear()
         self._next_index = 0
 
     def resync_to(self, next_index: int) -> None:
@@ -146,6 +172,8 @@ class PatchState:
             "canvas": dict(DEFAULT_CANVAS),
             "nodes": nodes,
             "edges": edges,
+            "presets": {name: {recv: list(atoms) for recv, atoms in m.items()}
+                        for name, m in self.presets.items()},
         }
 
     def load_ir(self, ir: dict) -> None:
@@ -156,6 +184,8 @@ class PatchState:
         """
         self.objects.clear()
         self.edges.clear()
+        self.presets = {name: {recv: list(atoms) for recv, atoms in m.items()}
+                        for name, m in ir.get("presets", {}).items()}
         max_id = -1
         for node in ir.get("nodes", []):
             params = {k: v for k, v in node.items() if k not in ("id", "kind")}

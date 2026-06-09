@@ -46,9 +46,9 @@ formats so each lands cleanly:
 
 | Client | How to install | What it activates |
 |---|---|---|
-| **Claude Code** (CLI REPL) | inside a `claude` session: `/plugin marketplace add jfboisvenue/pd-mcp-server` then `/plugin install puredata@puredata-marketplace` | Skill auto-load + 23 MCP tools |
-| **Claude Desktop — Cowork sessions** | Plugins panel → **"Add from repository"** → paste `https://github.com/jfboisvenue/pd-mcp-server` | Skill auto-load + 23 MCP tools (Cowork chat only) |
-| **Claude Desktop — regular chat** | Download `puredata-mcp.mcpb` from [Releases](https://github.com/jfboisvenue/pd-mcp-server/releases) → double-click → Install via **Settings → Extensions** | 23 MCP tools (no skill — the plugin/skill format isn't loaded by this channel) |
+| **Claude Code** (CLI REPL) | inside a `claude` session: `/plugin marketplace add jfboisvenue/pd-mcp-server` then `/plugin install puredata@puredata-marketplace` | Skill auto-load + 26 MCP tools |
+| **Claude Desktop — Cowork sessions** | Plugins panel → **"Add from repository"** → paste `https://github.com/jfboisvenue/pd-mcp-server` | Skill auto-load + 26 MCP tools (Cowork chat only) |
+| **Claude Desktop — regular chat** | Download `puredata-mcp.mcpb` from [Releases](https://github.com/jfboisvenue/pd-mcp-server/releases) → double-click → Install via **Settings → Extensions** | 26 MCP tools (no skill — the plugin/skill format isn't loaded by this channel) |
 
 You can install both — the plugin (Code + Cowork) and the `.mcpb`
 (regular Desktop chat) coexist, share the same source code, and don't
@@ -210,13 +210,21 @@ conventions from individual tool docstrings.
 | `pd_list_checkpoints` | List all checkpoints across branches in the checkpoints repo |
 | `pd_export_pd` | Write a standalone, openable `.pd` file from the current patch or a checkpoint |
 | `pd_diff` | Musical graph-level diff between two checkpoints, or a checkpoint vs. the live patch |
+| `pd_save_preset` | Save a named bag of parameter values (`{receiver: atoms}`) into the IR |
+| `pd_apply_preset` | Re-send a saved preset's values into the live patch (non-destructive — no re-render) |
+| `pd_list_presets` | List saved presets and their values |
 
-The last five are the **versioning layer**: the server holds an authoritative
-in-memory model of the patch (the IR) and serializes *to* `.pd`, never parses
-*from* it. Checkpoints live in their own git repo (default `<project>/checkpoints/`,
-gitignored), each commit pairing `patch.json` (the IR) with `patch.pd` (the
-openable file). Branches double as A/B sound variants. See `pd_init`'s guide
-for the full workflow.
+`pd_snapshot` … `pd_diff` are the **versioning layer**: the server holds an
+authoritative in-memory model of the patch (the IR) and serializes *to* `.pd`,
+never parses *from* it. Checkpoints live in their own git repo (default
+`<project>/checkpoints/`, gitignored), each commit pairing `patch.json` (the IR)
+with `patch.pd` (the openable file). Branches double as A/B sound variants.
+
+`pd_save_preset` … `pd_list_presets` are the **presets layer**: build your patch
+so every tweakable parameter is fed by an `[r <name>]`, and parameter values
+become data you can name, recall, and version. A preset rides in the IR, so a
+snapshot captures it with the graph; recalling one is a pure message send, never
+a re-render. See `pd_init`'s guide for the full workflow.
 
 Python class files (`.pd_py`) written by `pd_create_python_object` live in
 `pd/scripts/` by default, which the host patch declares via

@@ -51,7 +51,8 @@ TYPICAL WORKFLOW
 4. pd_connect    (use ids returned by step 3)
 5. pd_set_dsp on=true                   (only when ready -- audio is loud)
 6. pd_send_message                      (drive a [r <name>] in the patch)
-7. pd_snapshot label="..."              (checkpoint a state worth keeping)
+7. pd_save_preset / pd_apply_preset     (name + recall parameter scenes)
+8. pd_snapshot label="..."              (checkpoint a state worth keeping)
 
 ============================================================
 COMMON OBJECTS BY TASK
@@ -161,6 +162,41 @@ Two limits to know:
   must still be on disk), and py4pd's module cache may require a Pd
   restart to pick up changed Python code.
 - Single canvas: the IR is flat -- nested subpatches are not modeled.
+
+============================================================
+PRESETS / PARAMETER AUTOMATION (save / apply / list)
+============================================================
+The payoff of the [r <name>] discipline: a PRESET is a named bag of
+parameter values -- {receiver: atoms} -- that you can recall instantly
+without ever re-rendering. Applying one is pure pd_send_message under the
+hood, so it is non-destructive and cheap.
+
+Design your patch so every tweakable parameter is fed by an [r <name>]:
+    pd_create_object("r", ["freq"])     -> drives an [osc~]
+    pd_create_object("r", ["cutoff"])   -> drives a [lop~]
+Then values become data you can name and snapshot, not structure.
+
+- pd_save_preset(name, params)
+    params is {receiver: [atoms]}, e.g.
+      pd_save_preset("bright", {"freq": ["880"], "cutoff": ["4000"]})
+    Stored IN THE IR, so the next pd_snapshot versions it with the graph.
+    Re-saving a name overwrites it.
+- pd_apply_preset(name)
+    Re-sends every receiver->atoms pair into the live patch. The matching
+    [r <name>] objects must exist (they do after a pd_restore, which
+    re-renders the graph). Never re-renders.
+- pd_list_presets()
+    Shows saved presets and their values.
+
+How presets and checkpoints compose:
+- A pd_snapshot captures BOTH the graph AND the presets defined so far.
+- A pd_restore rebuilds the graph and brings the preset DEFINITIONS back,
+  but does NOT auto-apply them -- Pd does not persist sent parameter
+  values, so after a restore call pd_apply_preset(name) to recall the
+  sound. (Restoring the graph alone gives you the patch at its creation-
+  arg defaults.)
+- Branches are A/B *structure*; presets are A/B *values within one graph*.
+  Use presets to morph between scenes; use branches for variant patches.
 
 ============================================================
 PYTHON IN PD (py4pd 1.2.3+ -- .pd_py classes)
