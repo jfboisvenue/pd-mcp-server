@@ -26,7 +26,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from mcp.server.fastmcp import FastMCP
 
-from . import builders, pd_serialize, versioning
+from . import builders, pd_diff, pd_serialize, versioning
 from .fudi import FudiClient, FudiError
 from .guide import GUIDE
 from .patch_state import PatchState
@@ -389,6 +389,23 @@ class ExportPdInput(BaseModel):
         default=None,
         description="Checkpoints repo to read `ref` from (see pd_snapshot). "
                     "Only used when `ref` is given.")
+
+
+class DiffInput(BaseModel):
+    """Graph-level diff between two checkpoints (or a checkpoint vs current)."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    from_ref: str = Field(..., min_length=1, max_length=200,
+                          description="Base checkpoint: a label, commit hash, or "
+                                      "branch. The diff is computed FROM here.")
+    to_ref: Optional[str] = Field(
+        default=None,
+        description="Target checkpoint (label/hash/branch). If omitted, the "
+                    "current in-memory patch is used as the target -- i.e. "
+                    "'what changed since `from_ref`?'.")
+    checkpoints_dir: Optional[str] = Field(
+        default=None,
+        description="Absolute path to the checkpoints repo (see pd_snapshot).")
 
 
 # --------------------------------------------------------------------------- #
@@ -994,6 +1011,36 @@ async def pd_export_pd(params: ExportPdInput) -> str:
             path=str(out),
             nodes=len(ir.get("nodes", [])), edges=len(ir.get("edges", [])),
             source=params.ref or "current",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_diff",
+    annotations={"title": "Diff Pd Checkpoints", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": False},
+)
+async def pd_diff(params: DiffInput) -> str:
+    """Graph-level diff between two checkpoints (or a checkpoint vs current).
+
+    Reports added/removed/changed objects and added/removed connections in
+    musical terms ("node osc~ 880 added", "edge 1:0 -> 2:1 removed"),
+    instead of raw JSON/coordinate noise. Omit `to_ref` to ask "what
+    changed since `from_ref`?" against the live patch.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        checkpoints_dir = versioning.resolve_checkpoints_dir(params.checkpoints_dir)
+        old = versioning.read_ir_at(checkpoints_dir, params.from_ref)
+        new = (versioning.read_ir_at(checkpoints_dir, params.to_ref)
+               if params.to_ref else _state.to_ir())
+        diff = pd_diff.diff_ir(old, new)
+        return _ok(
+            pd_diff.format_diff(diff),
+            from_ref=params.from_ref, to_ref=params.to_ref or "current",
+            diff=diff,
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)

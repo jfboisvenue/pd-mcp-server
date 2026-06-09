@@ -138,6 +138,11 @@ model is what gets versioned and re-rendered.
     patch, or a checkpoint when `ref` is given. Use it to hand a patch to
     a human or to Claude Code. (Every pd_snapshot also writes a patch.pd
     inside the checkpoint, so each checkpoint is openable too.)
+- pd_diff(from_ref, to_ref?, checkpoints_dir?)
+    Graph-level diff: added/removed/changed objects and connections in
+    musical terms, not coordinate noise. Compares two checkpoints, or a
+    checkpoint vs the current patch (omit to_ref). Great for seeing what
+    distinguishes two A/B variants on different branches.
 
 Where checkpoints live: pass `checkpoints_dir` (absolute) to keep them
 next to the user's project; otherwise the server uses PD_CHECKPOINTS_DIR
