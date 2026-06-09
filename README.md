@@ -231,6 +231,10 @@ but that file survives — `pd_recover` reloads and re-renders it so the canvas
 matches again. Autosave is unsaved-work recovery; `pd_snapshot`/`pd_restore`
 remain the way to keep named, versioned states.
 
+> If your `project_dir` is itself a git repo, add `.pd_session.json` to its
+> `.gitignore` — it's a transient working file, not something to commit. (The
+> `checkpoints/` repo is separate and already its own git history.)
+
 `pd_save_preset` … `pd_list_presets` are the **presets layer**: build your patch
 so every tweakable parameter is fed by an `[r <name>]`, and parameter values
 become data you can name, recall, and version. A preset rides in the IR, so a
