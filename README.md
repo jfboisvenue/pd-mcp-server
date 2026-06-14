@@ -46,9 +46,9 @@ formats so each lands cleanly:
 
 | Client | How to install | What it activates |
 |---|---|---|
-| **Claude Code** (CLI REPL) | inside a `claude` session: `/plugin marketplace add jfboisvenue/pd-mcp-server` then `/plugin install puredata@puredata-marketplace` | Skill auto-load + 27 MCP tools |
-| **Claude Desktop — Cowork sessions** | Plugins panel → **"Add from repository"** → paste `https://github.com/jfboisvenue/pd-mcp-server` | Skill auto-load + 27 MCP tools (Cowork chat only) |
-| **Claude Desktop — regular chat** | Download `puredata-mcp.mcpb` from [Releases](https://github.com/jfboisvenue/pd-mcp-server/releases) → double-click → Install via **Settings → Extensions** | 27 MCP tools (no skill — the plugin/skill format isn't loaded by this channel) |
+| **Claude Code** (CLI REPL) | inside a `claude` session: `/plugin marketplace add jfboisvenue/pd-mcp-server` then `/plugin install puredata@puredata-marketplace` | Skill auto-load + 30 MCP tools |
+| **Claude Desktop — Cowork sessions** | Plugins panel → **"Add from repository"** → paste `https://github.com/jfboisvenue/pd-mcp-server` | Skill auto-load + 30 MCP tools (Cowork chat only) |
+| **Claude Desktop — regular chat** | Download `puredata-mcp.mcpb` from [Releases](https://github.com/jfboisvenue/pd-mcp-server/releases) → double-click → Install via **Settings → Extensions** | 30 MCP tools (no skill — the plugin/skill format isn't loaded by this channel) |
 
 You can install both — the plugin (Code + Cowork) and the `.mcpb`
 (regular Desktop chat) coexist, share the same source code, and don't
@@ -214,6 +214,9 @@ conventions from individual tool docstrings.
 | `pd_save_preset` | Save a named bag of parameter values (`{receiver: atoms}`) into the IR |
 | `pd_apply_preset` | Re-send a saved preset's values into the live patch (non-destructive — no re-render) |
 | `pd_list_presets` | List saved presets and their values |
+| `pd_save_template` | Capture the patch (or a subset by id) as a reusable sub-graph; parameterize with `${token}` holes |
+| `pd_apply_template` | Stamp a template into the current patch (append), substituting `${tokens}`; returns the id-map for boundary wiring |
+| `pd_list_templates` | List saved templates with their object/connection counts and required `${params}` |
 
 `pd_snapshot` … `pd_recover` are the **versioning layer**: the server holds an
 authoritative in-memory model of the patch (the IR) and serializes *to* `.pd`,
@@ -246,6 +249,27 @@ so hydrating them is safe without a re-render). They also ride in the IR, so
 snapshots version them and `pd_clear_canvas` keeps them. Unlike the transient
 `.pd_session.json`, `presets.json` is meaningful data — fine to commit to your
 project repo. See `pd_init`'s guide for the full workflow.
+
+`pd_save_template` … `pd_list_templates` are the **templates layer**: where a
+preset recalls *values*, a template stamps *structure*. Build a unit once — a
+synth voice, a filter+envelope, a meter — capture it (whole canvas, or a subset
+by `ids`, keeping only the wiring internal to that selection), then
+`pd_apply_template` **appends** copies into any patch. Because Pd's creation
+index is append-only, a stamped instance just takes the next free ids, and the
+tool returns an `id_map` (template-local id → new canvas id) so you can wire the
+copy's boundary into the rest of the patch. Parameterize with `${token}`
+substitution — not a new language, just named holes in object args / message
+atoms / comment text (e.g. `[r freq_${v}]`), filled at apply so multiple
+instances get unique, non-colliding receiver and buffer names. Because a
+template is reusable *tooling* — a synth voice you want in **every** patch, not
+one project's content — the library is **global**, not per-project: each
+template is saved as one `<name>.json` file in your **Pd user folder**, which
+the server **auto-locates** (it reads Pd's own search paths from `~/.pdsettings`
+/ the macOS plist, landing on e.g. `~/Documents/Pd/templates`; override with
+`PD_TEMPLATES_DIR`). No project binding is needed — they persist and are
+reusable everywhere, the save response reports the exact path, and `pd_init`
+announces what it loaded. Unlike presets they do **not** ride in the IR. See
+`pd_init`'s guide for the two-voice cookbook.
 
 Python class files (`.pd_py`) written by `pd_create_python_object` live in
 `pd/scripts/` by default, which the host patch declares via

@@ -228,6 +228,69 @@ How presets and checkpoints compose:
   Use presets to morph between scenes; use branches for variant patches.
 
 ============================================================
+TEMPLATES (reusable sub-graphs: save / apply / list)
+============================================================
+A PRESET recalls values; a TEMPLATE stamps STRUCTURE. A template is a
+reusable fragment of the graph -- objects + their wiring -- that you build
+once and instantiate many times (e.g. a synth voice, a filter+envelope
+unit, a meter). Applying it creates real objects, APPENDED to the current
+patch (never a clear).
+
+Why this is safe and simple: Pd's creation index is append-only, so a
+stamped instance just takes the next free ids. The tool returns an
+`id_map` (template-local id -> new canvas id) so you can wire the new
+instance's boundary into the rest of the patch.
+
+Parameterize with ${token} substitution -- NOT a new language, just named
+holes. Put ${name} in object args, message atoms, or comment text:
+    pd_create_object("r", ["freq_${v}"])         -> [r freq_${v}]
+    pd_create_object("delwrite~", ["buf_${v}", "1000"])
+Then each instance gets UNIQUE, non-colliding names. (${tokens} are NOT
+substituted in GUI numeric vectors or py4pd class names.)
+
+- pd_save_template(name, description?, ids?)
+    Captures the current patch, or just `ids` (see pd_get_state) -- only
+    edges internal to that selection are kept; boundary edges are dropped
+    and reported. Local ids renormalize to 0..k-1. Saved to a GLOBAL
+    library, one <name>.json per template, in your Pd user folder
+    (auto-detected: <pd>/templates, e.g. ~/Documents/Pd/templates;
+    override with PD_TEMPLATES_DIR). It is reusable in EVERY patch with no
+    project binding, and the response reports the exact path.
+- pd_apply_template(name, params?, dx?, dy?)
+    Substitutes ${tokens} from `params` (every token MUST be supplied),
+    offsets positions by dx/dy so the copy doesn't overlap, creates the
+    objects + internal wiring, and returns `id_map` + the new id range.
+- pd_list_templates()
+    Shows each template's description, object/connection counts, and the
+    ${params} it requires.
+
+Canonical workflow -- 2 detuned voices into one [dac~]:
+    # build ONE voice with a ${v} hole, behind receivers
+    pd_create_object("r", ["freq_${v}"], x=40, y=40)      # id 0
+    pd_create_object("osc~", [], x=40, y=90)              # id 1
+    pd_create_object("*~", ["0.1"], x=40, y=140)          # id 2
+    pd_connect(0,0, 1,0); pd_connect(1,0, 2,0)
+    pd_save_template("voice", ids=[0,1,2])
+    pd_clear_canvas()
+    # a shared output, then stamp two voices and wire each in
+    pd_create_object("dac~", [], x=40, y=400)             # id 0
+    r1 = pd_apply_template("voice", params={"v":"1"}, dx=0,   dy=0)
+    r2 = pd_apply_template("voice", params={"v":"2"}, dx=200, dy=0)
+    # r*.id_map[2] is each voice's [*~]; wire its outlet 0 -> dac~ inlets
+    pd_connect(r1.id_map["2"], 0, 0, 0)
+    pd_connect(r2.id_map["2"], 0, 0, 1)
+    # drive them live (or save a preset)
+    pd_send_message("freq_1", ["220"]); pd_send_message("freq_2", ["223"])
+
+Template vs preset vs branch (note the scope difference):
+- Template = reusable STRUCTURE (a generator). GLOBAL library (your Pd
+  user folder), shared across ALL patches -- build a voice once, use it
+  everywhere.
+- Preset   = named VALUES for one patch. Rides in the IR + per-project
+  presets.json.
+- Branch   = a whole variant patch under per-project versioning.
+
+============================================================
 PYTHON IN PD (py4pd 1.2.3+ -- .pd_py classes)
 ============================================================
 With py4pd installed (Pd menu Help -> Find externals -> "py4pd"), you
