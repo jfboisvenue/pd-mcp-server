@@ -1,6 +1,6 @@
 [project]
 name = "puredata-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "A reliable Model Context Protocol server for Pure Data, driving Pd vanilla over its native FUDI protocol (no externals, no OSC daemon)."
 readme = "README.md"
 requires-python = ">=3.10"
