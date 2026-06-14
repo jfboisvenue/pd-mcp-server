@@ -26,7 +26,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from mcp.server.fastmcp import FastMCP
 
-from . import builders, pd_diff, pd_serialize, versioning
+from . import builders, pd_diff, pd_serialize, templates, versioning
 from .fudi import FudiClient, FudiError
 from .guide import GUIDE
 from .patch_state import PatchState
@@ -50,6 +50,13 @@ PD_SCRIPTS_DIR = Path(os.environ.get(
 
 _client = FudiClient(host=PD_HOST, port=PD_PORT)
 _state = PatchState()
+
+# Global template library (cross-project): {name: {description, nodes, edges}}.
+# Unlike presets, templates do NOT ride in the IR -- they are a library of
+# reusable sub-graphs (generators of structure), persisted as one <slug>.json per
+# template under the resolved global templates dir (see _resolve_templates_dir)
+# and hydrated at pd_init. The graph fragments use local 0-based ids. See templates.py.
+_templates: Dict[str, dict] = {}
 
 # Session-scoped project binding, set by pd_init(project_dir=...). When set,
 # it becomes the DEFAULT location for this patch's checkpoints repo
@@ -130,6 +137,119 @@ def _load_presets_from_disk() -> int:
     except (OSError, ValueError):
         return 0
     return _state.preset_count()
+
+
+def _pd_user_dir() -> Optional[Path]:
+    """Best-effort detect Pd's user folder (the one that holds ``externals``).
+
+    Reads the search paths Pd records for itself and returns the ancestor named
+    ``Pd`` -- e.g. ``path1 = ~/Documents/Pd/externals`` yields ``~/Documents/Pd``.
+    Sources, in order: ``~/.pdsettings`` (Linux/Windows text) then the macOS
+    preferences plist. Returns None if nothing conclusive is found.
+    """
+    paths: List[str] = []
+    settings = Path.home() / ".pdsettings"
+    if settings.exists():
+        try:
+            for line in settings.read_text(encoding="utf-8").splitlines():
+                key, sep, val = line.partition(":")
+                if sep and key.startswith("path") and key[4:].strip().isdigit():
+                    paths.append(val.strip())
+        except OSError:
+            pass
+    plist = Path.home() / "Library" / "Preferences" / "org.puredata.pd.plist"
+    if not paths and plist.exists():
+        try:
+            import plistlib
+            data = plistlib.loads(plist.read_bytes())
+            for k, v in data.items():
+                if k.startswith("path") and k[4:].isdigit() and isinstance(v, str):
+                    paths.append(v)
+        except Exception:  # noqa: BLE001 -- detection is best-effort
+            pass
+    for p in paths:
+        cur = Path(p).expanduser()
+        for anc in (cur, *cur.parents):
+            if anc.name.lower() == "pd":
+                return anc
+    return None
+
+
+def _resolve_templates_dir() -> Path:
+    """Resolve the GLOBAL template library folder (cross-project, always there).
+
+    Templates are reusable tooling -- a synth voice you stamp into ANY patch --
+    not the content of one project, so unlike checkpoints/presets they live in a
+    single global library, not per ``project_dir``. Resolution is deterministic
+    (re-derived identically every session, so the library is always found again):
+      1. ``PD_TEMPLATES_DIR`` env var.
+      2. Pd's user folder via ``~/.pdsettings`` / macOS plist -> ``<pd>/templates``.
+      3. ``~/Documents/Pd/templates`` when ``~/Documents/Pd`` exists (Deken default).
+      4. ``~/.pd-mcp/templates`` fallback (always works).
+
+    Does NOT create the directory -- merely resolving a path (e.g. at ``pd_init``
+    to load) must not litter the filesystem; ``_persist_template`` mkdirs on the
+    first actual save. Each template is one ``<slug>.json`` file in this folder.
+    """
+    env = os.environ.get("PD_TEMPLATES_DIR")
+    if env:
+        return Path(env).expanduser()
+    pd_dir = _pd_user_dir()
+    if pd_dir is not None:
+        return pd_dir / "templates"
+    documents_pd = Path.home() / "Documents" / "Pd"
+    if documents_pd.exists():
+        return documents_pd / "templates"
+    return Path.home() / ".pd-mcp" / "templates"
+
+
+def _template_slug(name: str) -> str:
+    """Filename-safe slug for a template name (the real name rides inside the file)."""
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
+    return slug or "template"
+
+
+def _persist_template(name: str) -> Optional[Path]:
+    """Best-effort write one template to ``<templates_dir>/<slug>.json``.
+
+    The file stores the real ``name`` alongside the graph, so load is robust to
+    slug collisions/renames. Returns the file path on success, else None.
+    """
+    d = _resolve_templates_dir()
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        payload = {"name": name, **_templates[name]}
+        dst = d / f"{_template_slug(name)}.json"
+        tmp = d / f".{_template_slug(name)}.json.tmp"
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, dst)
+        return dst
+    except OSError:
+        return None
+
+
+def _load_templates_from_disk() -> int:
+    """Hydrate the in-memory library by globbing ``<templates_dir>/*.json``.
+
+    Source of truth is the folder, so we clear and reload. Each file is keyed by
+    its stored ``name`` (falling back to the filename stem). Returns the count.
+    """
+    d = _resolve_templates_dir()
+    if not d.exists():
+        return 0
+    _templates.clear()
+    for f in sorted(d.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        name = data.get("name") or f.stem
+        _templates[name] = {"description": data.get("description", ""),
+                            "nodes": data.get("nodes", []),
+                            "edges": data.get("edges", [])}
+    return len(_templates)
 
 
 _state.on_change = _persist_session
@@ -550,6 +670,46 @@ class ApplyPresetInput(BaseModel):
                       description="Name of a saved preset (see pd_list_presets).")
 
 
+class SaveTemplateInput(BaseModel):
+    """Capture a reusable sub-graph from the current canvas as a template."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=120,
+                      description="Template name to save under (overwrites if it exists).")
+    description: Optional[str] = Field(
+        default=None, max_length=500,
+        description="Optional human note on what this template builds.")
+    ids: Optional[List[int]] = Field(
+        default=None,
+        description="Object ids to capture (see pd_get_state). Only edges whose "
+                    "BOTH endpoints are in this set are kept; boundary edges are "
+                    "dropped (reported). Omit to capture the entire current patch. "
+                    "Local ids are renormalized to 0..k-1 so the template stamps "
+                    "anywhere. To parameterize, put ${token} in object args / "
+                    "message atoms / comment text (e.g. [r freq_${v}], "
+                    "[delwrite~ buf_${v} 1000]); tokens ride through capture "
+                    "literally and are filled in at pd_apply_template.")
+
+
+class ApplyTemplateInput(BaseModel):
+    """Stamp a saved template into the current patch (append, non-destructive)."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=120,
+                      description="Name of a saved template (see pd_list_templates).")
+    params: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Values for the template's ${tokens}, e.g. {'v': '1'}. EVERY "
+                    "${token} in the template must be supplied. Use a distinct "
+                    "value per instance so receiver/buffer names stay unique "
+                    "(freq_1, freq_2, ...).")
+    dx: int = Field(default=0, ge=-10000, le=10000,
+                    description="X offset added to every object's position so a "
+                                "fresh instance doesn't overlap an existing one.")
+    dy: int = Field(default=0, ge=-10000, le=10000,
+                    description="Y offset added to every object's position.")
+
+
 # --------------------------------------------------------------------------- #
 # Init -- mandatory first call
 # --------------------------------------------------------------------------- #
@@ -583,6 +743,13 @@ async def pd_init(params: InitInput = InitInput()) -> str:
         p.mkdir(parents=True, exist_ok=True)
         _PROJECT_DIR = p
     _state.mark_initialized()
+    # The template library is GLOBAL (cross-project), so it loads whether or not
+    # a project is bound -- unlike presets/checkpoints, which are per project.
+    n_templates = _load_templates_from_disk()
+    templates_note = ""
+    if n_templates:
+        templates_note = (f"\nLoaded {n_templates} template(s) from "
+                          f"{_resolve_templates_dir()} -- see pd_list_templates.")
     if _PROJECT_DIR is not None:
         n_presets = _load_presets_from_disk()  # hydrate the durable library
         note = (f"{GUIDE}\n\n[session bound to project: {_PROJECT_DIR}]\n"
@@ -592,6 +759,7 @@ async def pd_init(params: InitInput = InitInput()) -> str:
         if n_presets:
             note += (f"\nLoaded {n_presets} preset(s) from "
                      f"{_PROJECT_DIR / 'presets.json'} -- see pd_list_presets.")
+        note += templates_note
         recover = _recoverable_summary()
         if recover:
             note += (f"\n\n[recoverable session found: {recover}] The live IR "
@@ -599,7 +767,7 @@ async def pd_init(params: InitInput = InitInput()) -> str:
                      "re-render this state, OR pd_clear_canvas to start fresh "
                      "(which overwrites the autosave).")
         return note
-    return GUIDE
+    return GUIDE + templates_note
 
 
 def _recoverable_summary() -> Optional[str]:
@@ -1354,6 +1522,129 @@ async def pd_list_presets() -> str:
         "presets": {name: _state.get_preset(name)
                     for name in _state.preset_names()},
     }, indent=2)
+
+
+# --------------------------------------------------------------------------- #
+# Templates -- reusable sub-graphs (structure), stamped with ${token} params
+# --------------------------------------------------------------------------- #
+
+@mcp.tool(
+    name="pd_save_template",
+    annotations={"title": "Save Pd Template Patch", "readOnlyHint": False,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": False},
+)
+async def pd_save_template(params: SaveTemplateInput) -> str:
+    """Capture the current patch (or a subset by id) as a reusable template.
+
+    A template is a sub-graph -- structure, unlike a preset's values. Build a
+    unit once (e.g. a synth voice), save it here, then pd_apply_template stamps
+    copies into any patch. Pass ``ids`` to capture only part of the canvas; only
+    edges internal to that selection are kept. Parameterize by putting ${token}
+    in object args / message atoms / comment text (e.g. [r freq_${v}]) -- they
+    are filled at apply, so multiple instances get unique names. Saved to a
+    GLOBAL library (one <name>.json per template) that auto-locates your Pd user
+    folder (<pd>/templates, e.g. ~/Documents/Pd/templates) so it's reusable in
+    EVERY patch, no project binding needed; override with PD_TEMPLATES_DIR. The
+    response reports the exact path. Reloaded at pd_init.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        frag, dropped = templates.capture(_state.to_ir(), params.ids)
+        _templates[params.name] = {"description": params.description or "",
+                                   "nodes": frag["nodes"], "edges": frag["edges"]}
+        saved_to = _persist_template(params.name)  # global library, one file per template
+        required = templates.required_params(frag)
+        where = str(saved_to) if saved_to else f"{_resolve_templates_dir()} (write failed)"
+        msg = (f"Template '{params.name}' saved to {where} "
+               f"({len(frag['nodes'])} objects, {len(frag['edges'])} connections).")
+        if dropped:
+            msg += (f" Dropped {dropped} boundary connection(s) -- one endpoint "
+                    "was outside the selection.")
+        if required:
+            msg += f" Supply these params at apply: {required}."
+        return _ok(
+            msg, name=params.name, nodes=len(frag["nodes"]),
+            edges=len(frag["edges"]), dropped_boundary_edges=dropped,
+            params=required, template_count=len(_templates),
+            templates_dir=str(_resolve_templates_dir()),
+            saved_to=str(saved_to) if saved_to else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_apply_template",
+    annotations={"title": "Apply Pd Template Patch", "readOnlyHint": False,
+                 "destructiveHint": False, "idempotentHint": False,
+                 "openWorldHint": True},
+)
+async def pd_apply_template(params: ApplyTemplateInput) -> str:
+    """Stamp a saved template into the current patch (append, non-destructive).
+
+    Substitutes ${tokens} from ``params``, offsets every object by ``dx``/``dy``
+    so it doesn't overlap, creates the objects and their internal wiring, and
+    APPENDS them to the live graph (no clear). Returns ``id_map`` (template-local
+    id -> new canvas id) so you can wire the instance's boundary -- e.g. its
+    output -- into the rest of the patch with pd_connect. Stamp N copies by
+    calling N times with distinct ``params`` (freq_1, freq_2, ...) and growing
+    ``dx``/``dy``. Note: py4pd nodes still need their .pd_py file on disk.
+    """
+    if (gate := _require_init()): return gate
+    try:
+        if params.name not in _templates:
+            return (f"Error: no template named '{params.name}'. "
+                    f"Known templates: {sorted(_templates)}.")
+        try:
+            filled = templates.substitute(_templates[params.name], params.params)
+        except ValueError as exc:
+            return _err(exc)
+        base = _state.next_index()
+        nodes, edges, id_map = templates.instantiation_plan(
+            filled, base, params.dx, params.dy)
+        for node in nodes:
+            kind = node["kind"]
+            node_params = {k: v for k, v in node.items() if k != "kind"}
+            _client.send_atoms(builders.atoms_for(kind, node_params))
+            _state.add(kind, node_params)
+        for (src, so, dst, di) in edges:
+            _client.send_atoms(builders.connect_atoms(src, so, dst, di))
+            _state.add_edge(src, so, dst, di)
+        last = base + len(nodes) - 1
+        return _ok(
+            f"Applied template '{params.name}': stamped {len(nodes)} objects and "
+            f"{len(edges)} connections at ids {base}..{last}." if nodes else
+            f"Template '{params.name}' is empty; nothing stamped.",
+            name=params.name, nodes=len(nodes), edges=len(edges),
+            id_map=id_map, base_index=base,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="pd_list_templates",
+    annotations={"title": "List Pd Template Patches", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": True,
+                 "openWorldHint": False},
+)
+async def pd_list_templates() -> str:
+    """List saved templates: description, object/connection counts, and the
+    ${params} each one requires at pd_apply_template."""
+    if (gate := _require_init()): return gate
+    out = {
+        name: {
+            "description": _templates[name].get("description", ""),
+            "nodes": len(_templates[name].get("nodes", [])),
+            "edges": len(_templates[name].get("edges", [])),
+            "params": templates.required_params(_templates[name]),
+        }
+        for name in sorted(_templates)
+    }
+    return json.dumps({"count": len(_templates),
+                       "templates_dir": str(_resolve_templates_dir()),
+                       "templates": out}, indent=2)
 
 
 def main() -> None:
